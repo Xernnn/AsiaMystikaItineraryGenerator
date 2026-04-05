@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asia Mystika – Itinerary Generator</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════ HEADER ═══ -->
+<header class="app-header">
+  <div class="header-inner">
+    <div class="header-brand">
+      <span class="brand-icon">✈</span>
+      <div>
+        <div class="brand-name">Asia Mystika</div>
+        <div class="brand-sub">Itinerary Generator</div>
+      </div>
+    </div>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="generator">✏️ Generator</button>
+      <button class="tab-btn" data-tab="admin">⚙️ Admin</button>
+    </nav>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════ GENERATOR TAB ═══ -->
+<main id="tab-generator" class="tab-content active">
+  <div class="gen-layout">
+
+    <!-- ── LEFT: Steps ── -->
+    <aside class="steps-panel">
+
+      <!-- Quick Parse -->
+      <div class="step-card" id="quickParseCard">
+        <div class="step-header quick-parse-header" id="quickParseToggle">
+          <span class="step-badge" style="background:var(--success)">⚡</span>
+          <span class="step-title" style="color:var(--success)">Quick Parse – Paste Request</span>
+          <span id="quickParseChevron" style="color:var(--text-muted);font-size:12px">▼</span>
+        </div>
+        <div class="step-body" id="quickParseBody">
+          <div class="field-group">
+            <label>Paste travel request email / brief</label>
+            <textarea id="requestPasteArea" rows="8" placeholder="Dear Hiếu,&#10;Travel Date: 31st May 2026&#10;No. of Pax: 13 Adults &amp; 6 Children (9, 8, 4, 4, 3, 1.5 years)&#10;No. of Room: 6 Rooms on Double/Triple Sharing&#10;Trip Duration: 9N/10D&#10;Destination To Cover: 2N Hanoi + 1N Ha Long + 3N Da Nang + 3N Ho Chi Minh&#10;Resort/Hotel Category: 3* and 4* Hotel&#10;Meal Plan: MAP"></textarea>
+          </div>
+          <button class="btn-primary" id="parseRequestBtn" style="width:100%">⚡ Parse &amp; Auto-fill All Steps</button>
+          <div id="parseWarnings" style="display:none;margin-top:8px;padding:8px 10px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:12px;color:#856404;white-space:pre-wrap"></div>
+        </div>
+      </div>
+
+      <!-- Step 1 -->
+      <div class="step-card" id="step1">
+        <div class="step-header">
+          <span class="step-badge">1</span>
+          <span class="step-title">Thông tin chung</span>
+        </div>
+        <div class="step-body">
+          <div class="field-group">
+            <label>Tên tour</label>
+            <input type="text" id="tourTitle" placeholder="Best of Vietnam – 10D9N Vietnam (Hanoi, Halong, Danang…)" />
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label>Ngày đi (From)</label>
+              <input type="date" id="dateFrom" />
+            </div>
+            <div class="field-group">
+              <label>Ngày về (To)</label>
+              <input type="date" id="dateTo" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label>Adults</label>
+              <input type="number" id="adults" min="1" value="2" />
+            </div>
+            <div class="field-group">
+              <label>Children</label>
+              <input type="number" id="children" min="0" value="0" />
+            </div>
+            <div class="field-group">
+              <label>Rooms</label>
+              <input type="number" id="rooms" min="1" value="1" />
+            </div>
+          </div>
+          <div class="field-group" id="childAgesGroup" style="display:none">
+            <label>Tuổi trẻ em (cách nhau bằng dấu phẩy)</label>
+            <input type="text" id="childAges" placeholder="9, 8, 4, 4, 3, 1.5" />
+          </div>
+          <div class="field-group">
+            <label>Loại phòng</label>
+            <select id="roomType">
+              <option value="double">Double / Twin Room</option>
+              <option value="triple">Triple Room (Double + Extra Bed)</option>
+              <option value="family">Family Room (4 pax)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Meal Plan</label>
+            <select id="mealPlan">
+              <option value="MAP">MAP – Breakfast + 1 main meal</option>
+              <option value="CP">CP – Breakfast only</option>
+              <option value="FB">Full Board – 3 meals</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="step-card" id="step2">
+        <div class="step-header">
+          <span class="step-badge">2</span>
+          <span class="step-title">Vận chuyển & Hướng dẫn</span>
+        </div>
+        <div class="step-body">
+          <div class="field-row">
+            <div class="field-group">
+              <label>Loại xe</label>
+              <select id="carSize">
+                <option value="7s">7-seater Private Car</option>
+                <option value="16s">16-seater Private Car</option>
+                <option value="29s">29-seater Private Car</option>
+                <option value="35s">35-seater Private Car</option>
+                <option value="45s">45-seater Private Car</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>Auto-suggest</label>
+              <div id="carSuggest" class="info-badge">—</div>
+            </div>
+          </div>
+          <div class="field-group">
+            <label>Guide language</label>
+            <select id="guideLanguage">
+              <option value="english">English speaking guide</option>
+              <option value="other">Other language (supplement applies)</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label>Shuttle Bus to Halong</label>
+              <select id="shuttleHalong">
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>Limousine to Sapa</label>
+              <select id="limoSapa">
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="step-card" id="step3">
+        <div class="step-header">
+          <span class="step-badge">3</span>
+          <span class="step-title">Itinerary Brief</span>
+        </div>
+        <div class="step-body">
+          <div class="brief-tabs">
+            <button class="brief-tab-btn active" data-btab="form">📋 Form</button>
+            <button class="brief-tab-btn" data-btab="paste">📄 Paste Table</button>
+          </div>
+
+          <!-- Form mode -->
+          <div id="brief-form-mode" class="brief-mode active">
+            <div id="briefRowsContainer"></div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn-add-row" id="addBriefRow" style="flex:1;width:auto">+ Thêm ngày</button>
+              <button class="btn-secondary" id="clearBriefBtn" style="font-size:12px;white-space:nowrap">🗑 Xóa tất cả</button>
+            </div>
+          </div>
+
+          <!-- Paste mode -->
+          <div id="brief-paste-mode" class="brief-mode">
+            <label>Paste bảng Markdown vào đây:</label>
+            <textarea id="briefPasteArea" rows="12" placeholder="| Day 1 (Sun, 31st May 2026) | Hanoi Arrival – Hanoi Free &amp; Easy | -/-/D |&#10;| Day 2 (Mon, 1st June 2026) | Hanoi – Hanoi Full-day City Tour | B/L/- |"></textarea>
+            <button class="btn-primary" id="parseBriefBtn">🔍 Parse Table</button>
+          </div>
+
+          <!-- Brief preview -->
+          <div class="brief-preview-wrap" id="briefPreviewWrap" style="display:none">
+            <div class="section-label">Preview:</div>
+            <div id="briefTablePreview" class="brief-preview-table"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4 -->
+      <div class="step-card" id="step4">
+        <div class="step-header">
+          <span class="step-badge">4</span>
+          <span class="step-title">Accommodation</span>
+        </div>
+        <div class="step-body">
+          <p class="step-hint">Destinations detected from your brief will appear here. Select hotels for each city.</p>
+          <div class="hotel-tiers">
+            <div class="hotel-tier-block" id="hotels3star">
+              <div class="tier-label">⭐⭐⭐ 3-Star Standard</div>
+              <div class="tier-cities" id="tier3Cities">
+                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
+              </div>
+            </div>
+            <div class="hotel-tier-block" id="hotels4star">
+              <div class="tier-label">⭐⭐⭐⭐ 4-Star Standard</div>
+              <div class="tier-cities" id="tier4Cities">
+                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
+              </div>
+            </div>
+            <div class="hotel-tier-block" id="hotels5star">
+              <div class="tier-label">⭐⭐⭐⭐⭐ 5-Star / Deluxe</div>
+              <div class="tier-cities" id="tier5Cities">
+                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generate button -->
+      <div class="generate-btn-wrap">
+        <button class="btn-generate" id="generateBtn">⚡ Generate Document</button>
+      </div>
+    </aside>
+
+    <!-- ── RIGHT: Output ── -->
+    <section class="output-panel">
+      <div class="output-toolbar">
+        <span class="output-title">📄 Document Preview</span>
+        <div class="output-actions">
+          <button class="btn-action" id="copyBtn">📋 Copy All</button>
+          <button class="btn-action btn-primary-sm" id="downloadDocxBtn">⬇️ Download .docx</button>
+        </div>
+      </div>
+      <div id="outputContent" class="output-content">
+        <div class="output-placeholder">
+          <div class="placeholder-icon">📝</div>
+          <p>Fill in the steps on the left, then click <strong>Generate Document</strong>.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<!-- ════════════════════════════════════════ ADMIN TAB ═══ -->
+<main id="tab-admin" class="tab-content">
+  <div class="admin-layout">
+    <div class="admin-sidebar">
+      <button class="admin-nav-btn active" data-asection="templates">📝 Templates</button>
+      <button class="admin-nav-btn" data-asection="hotels">🏨 Hotels</button>
+      <hr class="admin-divider" />
+      <button class="btn-action" id="exportConfigBtn">💾 Export Config</button>
+      <button class="btn-action" id="importConfigBtn">📂 Import Config</button>
+      <input type="file" id="importFileInput" accept=".json" style="display:none" />
+      <hr class="admin-divider" />
+      <button class="btn-action btn-danger-sm" id="resetConfigBtn">🔄 Reset to Defaults</button>
+    </div>
+
+    <div class="admin-content">
+      <!-- Templates section -->
+      <div id="admin-templates" class="admin-section active">
+        <div class="admin-section-header">
+          <h2>Template Manager</h2>
+          <button class="btn-primary" id="addTemplateBtn">+ Thêm Template</button>
+        </div>
+        <div class="city-filter-tabs" id="templateCityFilter"></div>
+        <div id="templateList" class="item-list"></div>
+
+        <!-- Add/Edit Template Modal -->
+        <div id="templateModal" class="modal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header">
+              <span id="templateModalTitle">Add Template</span>
+              <button class="modal-close" data-close="templateModal">✕</button>
+            </div>
+            <div class="modal-body">
+              <div class="field-group">
+                <label>City</label>
+                <select id="tmCity"></select>
+              </div>
+              <div class="field-group">
+                <label>Template Name (Key)</label>
+                <input type="text" id="tmKey" placeholder="e.g. Danang – Bana Hills – Danang" />
+              </div>
+              <div class="field-group">
+                <label>Detail Text</label>
+                <textarea id="tmText" rows="12" placeholder="08:00: After breakfast..."></textarea>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" data-close="templateModal">Cancel</button>
+              <button class="btn-primary" id="saveTemplateBtn">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hotels section -->
+      <div id="admin-hotels" class="admin-section">
+        <div class="admin-section-header">
+          <h2>Hotel Manager</h2>
+          <button class="btn-primary" id="addHotelBtn">+ Thêm Hotel</button>
+        </div>
+        <div class="city-filter-tabs" id="hotelStarFilter">
+          <button class="cft-btn active" data-stars="all">All</button>
+          <button class="cft-btn" data-stars="3">3★</button>
+          <button class="cft-btn" data-stars="4">4★</button>
+          <button class="cft-btn" data-stars="5">5★</button>
+        </div>
+        <div id="hotelList" class="item-list"></div>
+
+        <!-- Add/Edit Hotel Modal -->
+        <div id="hotelModal" class="modal" style="display:none">
+          <div class="modal-box modal-box-wide">
+            <div class="modal-header">
+              <span id="hotelModalTitle">Add Hotel</span>
+              <button class="modal-close" data-close="hotelModal">✕</button>
+            </div>
+            <div class="modal-body">
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Hotel Name</label>
+                  <input type="text" id="hmName" placeholder="Grand Hotel Hanoi" />
+                </div>
+                <div class="field-group">
+                  <label>Star Rating</label>
+                  <select id="hmStars">
+                    <option value="3">3★</option>
+                    <option value="4">4★</option>
+                    <option value="5">5★</option>
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label>City</label>
+                  <select id="hmCity"></select>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Room Type</label>
+                  <input type="text" id="hmRoomType" placeholder="Deluxe City View" />
+                </div>
+                <div class="field-group">
+                  <label>VAT</label>
+                  <select id="hmVat">
+                    <option value="true">Included (ĐÃ VAT)</option>
+                    <option value="false">Excluded (CHƯA VAT)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Low Season Rate</label>
+                  <input type="text" id="hmLowRate" placeholder="850k / 32 USD" />
+                </div>
+                <div class="field-group">
+                  <label>High Season Rate</label>
+                  <input type="text" id="hmHighRate" placeholder="950k / 35 USD" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Child Share (Ngủ chung)</label>
+                  <input type="text" id="hmChildShare" placeholder="150k / Free" />
+                </div>
+                <div class="field-group">
+                  <label>Extra Bed (Thêm Bed)</label>
+                  <input type="text" id="hmExtraBed" placeholder="300k / N/A" />
+                </div>
+              </div>
+              <div class="field-group">
+                <label>Upgrade Room Option (optional)</label>
+                <textarea id="hmUpgrade" rows="3" placeholder="Ocean View: +200k/night&#10;Junior Suite: +500k/night"></textarea>
+              </div>
+              <div class="field-group">
+                <label>Hotel URL (optional)</label>
+                <input type="url" id="hmUrl" placeholder="https://hotel.com" />
+              </div>
+              <div class="field-group">
+                <label>Notes / Flags</label>
+                <div class="checkbox-row">
+                  <label><input type="checkbox" id="hmFlagSkip" /> Skip (don't use)</label>
+                  <label><input type="checkbox" id="hmFlagNoEB" /> No Extra Bed</label>
+                  <label><input type="checkbox" id="hmFlagDC" /> Day Cruise Only</label>
+                  <label><input type="checkbox" id="hmFlagGIT" /> GIT Groups Only</label>
+                  <label><input type="checkbox" id="hmFlagPartial" /> Partial Price (?)</label>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn-secondary" data-close="hotelModal">Cancel</button>
+              <button class="btn-primary" id="saveHotelBtn">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ════════════════════════════════════════ TOAST ═══ -->
+<div id="toast" class="toast"></div>
+
+<!-- docx.js: generates .docx files in the browser -->
+<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

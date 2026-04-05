@@ -1,0 +1,11 @@
+{
+  "name": "asia-mystika-itinerary-generator",
+  "version": "1.0.0",
+  "description": "Itinerary Generator for Asia Mystika OTA",
+  "scripts": {
+    "serve": "python -m http.server 8000",
+    "parse-data": "python scripts/parse-excel.py"
+  },
+  "private": true,
+  "type": "module"
+}
