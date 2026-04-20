@@ -1,8 +1,20 @@
 // AUTO-GENERATED from Bảng Của Hiếu.xlsx — do not edit manually
 // Edit via Admin tab or modify this file carefully.
-// City codes: HN=Hà Nội, NB=Ninh Bình, SP=Sapa, HL=Hạ Long, DN=Đà Nẵng/Hội An, HC=Hồ Chí Minh, PQ=Phú Quốc
+// City codes: HN=Hà Nội, NB=Ninh Bình, SP=Sapa, HL=Hạ Long, DN=Đà Nẵng, HA=Hội An, HC=Hồ Chí Minh, PQ=Phú Quốc
+// NOTE: DN and HA were previously merged as a single "DN" bucket. They are now split so that
+// hotels / stays in Hội An can be tracked separately from Đà Nẵng. Existing DN templates still
+// pick up clients in Đà Nẵng (overnight there); use HA for days that overnight in Hội An.
 
-export const CITY_LABELS = {"HN": "Hà Nội", "NB": "Ninh Bình", "SP": "Sapa", "HL": "Hạ Long", "DN": "Đà Nẵng / Hội An", "HC": "Hồ Chí Minh", "PQ": "Phú Quốc"};
+export const CITY_LABELS = {
+  "HN": "Hà Nội",
+  "NB": "Ninh Bình",
+  "SP": "Sapa",
+  "HL": "Hạ Long",
+  "DN": "Đà Nẵng",
+  "HA": "Hội An",
+  "HC": "Hồ Chí Minh",
+  "PQ": "Phú Quốc",
+};
 
 export const templatesByCity = {
   "HN": [
@@ -123,6 +135,7 @@ export const templatesByCity = {
       "text": "Upon arrival at Danang International Airport, you’ll be greeted by your local guide and driver and transfer to the hotel to drop off your luggage before starting the Danang Half-day City Tour.\nFirst, you will visit Son Tra Peninsula to enjoy its stunning views and Linh Ung Pagoda. \n19:00: Dinner at Indian restaurant.\nAfter dinner, you will visit the vibrant Son Tra Night Market. Afterward, you will be taken to see the Water and Fire Show at Dragon Bridge. \nOvernight in Danang.\nNote: Check in hotel at 14:00. Early check-in will be surcharged."
     }
   ],
+  "HA": [],
   "HC": [
     {
       "key": "... Departure – Ho Chi Minh City Half-day tour",

@@ -1,150 +1,171 @@
 # Asia Mystika – Itinerary Generator
 
-A browser-based tool for generating tour itineraries for Asia Mystika OTA. No build step — pure vanilla JS ES modules.
+Browser-based tool for creating Vietnam tour itineraries and quotations.  
+**No build step. No dependencies to install.** Pure vanilla JS ES modules.
 
-## Quick Start
+---
+
+## Running the app
 
 ```bash
 npm run serve
-# then open http://localhost:8000
+# opens at http://localhost:8000
 ```
 
-Or directly: `python -m http.server 8000`
+Or directly:
 
-## How to Use
+```bash
+python -m http.server 8000
+```
 
-### Option A — Quick Parse (Paste Request)
+Then open **http://localhost:8000** in any modern browser.
 
-Click the **⚡ Quick Parse – Paste Request** card at the top of the steps panel, paste the client's email/brief, then click **⚡ Parse & Auto-fill All Steps**.
+---
 
-The parser extracts:
+## How it works — Wizard flow
 
-| Field | Detected from |
+The app uses a 4-step wizard. Each step unlocks the next after you click **Confirm & Continue**. You can always scroll up to edit a previous step — changes cascade forward automatically.
+
+### Step 1 — General Info
+
+| Field | Notes |
 |---|---|
-| Adults / Children / Ages | `No. of Pax: 13 Adults & 6 Children (9, 8, …)` |
-| Rooms | `No. of Room: 6 Rooms` |
-| Room type | `Double/Triple Sharing` → triple |
-| Date From | `Travel Date: 31st May 2026` |
-| Date To | Date From + nights |
-| Meal plan | `Meal Plan: MAP` |
-| Brief rows + cities | `2N Hanoi + 1N Ha Long + 3N Da Nang + 3N Ho Chi Minh` |
-| Tour title | Auto-generated from cities + duration |
-| Car size | Auto-suggested from total pax |
+| Tour title | Full name of the tour package |
+| From / To dates | Shown in DD/MM/YYYY next to the input |
+| Adults / Children | Child ages entry appears when children > 0 |
+| Meal plan | MAP / CP / Full Board |
+| Indian group | Adds an INDIAN GROUP tag to the document |
 
-After parsing, Step 3 shows the generated brief rows. You only need to pick templates and hotels.
+### Step 2 — Transport & Guide
 
-#### Example request to paste:
+- **Car size** is auto-suggested based on pax count. Children aged **5 and under are excluded** from the pax count for vehicle sizing.
+- **Sapa zone picker** appears automatically when any brief row involves Sapa. Options: 16-seater, 29-seater, or Split (1×29 + 1×16 when pax > 29).
+- **Phu Quoc – Rach Vem zone picker** appears the same way when a Rach Vem day is detected.
+- Shuttle to Halong and Limousine to Sapa toggles are independent.
+
+### Step 3 — Itinerary Brief
+
+The grid auto-generates one row per day between the From/To dates.
+
+| Column | Behaviour |
+|---|---|
+| **Day** | Day number + DD/MM/YYYY + long date (e.g. Thu, 22nd May 2026) |
+| **Itinerary** | Free-text title. **Exact match** against any saved template applies it automatically. If no exact match, the top-3 closest templates appear as clickable suggestion chips. If the title is truly new, a **📝 Save as new template** button appears below the table. |
+| **Meals** | Free text — type whatever format you prefer (e.g. `B/L/D`, `B+D`, `Brunch only`). |
+
+### Step 4 — Accommodation
+
+One block per city stay (non-consecutive stays in the same city get separate blocks).
+
+- **FIT / GIT toggle** at the top applies to all stays.
+- Each stay has a **3★ / 4★ / 5★ star toggle** on the left to switch hotel tiers independently.
+- Hotel dropdown on the right updates to show only hotels matching that city and star rating.
+- Inputs per stay:
+  - 2-pax rooms, 3-pax rooms, Extra beds, Share beds
+  - FOC rooms (manually entered — cost is spread across all pax + 1 tour leader)
+  - Early check-in day (surcharge = 50% of room rate ÷ pax per room)
+  - Room upgrade (if hotel has an upgrade option configured)
+- **Per-pax** line updates live showing base cost + ECI + upgrade surcharges.
+- Season (low / high) is determined automatically from the stay dates against each hotel's `highSeason` ranges.
+
+### Generate
+
+Click **⚡ Generate Document** to render the full preview on the right panel:
+
+- Itinerary Brief table
+- Day-by-day Details (from matched templates)
+- Accommodation tables (per stay, per tier, with surcharge rows)
+- Notes, Tour Includes, Tour Excludes, Important Notes, Cancellation Policy
+
+Use **📋 Copy All** to copy plain text, or **⬇️ Download .docx** for a formatted Word file.
+
+---
+
+## Admin tab
+
+### Templates
+
+Manage the template library used for auto-matching in Step 3.
+
+- Filter by city
+- Add / Edit / Delete templates
+- Each template: **City**, **Key** (name shown in suggestions), **Detail text** (full activity schedule)
+
+### Hotels
+
+Manage the hotel database used in Step 4.
+
+- Filter by star rating
+- Each hotel stores:
+
+| Field | Description |
+|---|---|
+| Name, City, Star rating | Basic info |
+| Room type | e.g. Deluxe City View |
+| Currency | USD or VND |
+| VAT | Included or excluded |
+| Rates | 2×2 matrix: FIT / GIT × Low season / High season |
+| Extra bed / Share bed | Per-night rate |
+| Early check-in override | Leave blank to use the default 50%-of-rate formula |
+| Upgrade | Room type name + rate per night |
+| FOC rule | Every N rooms → M free rooms |
+| High-season ranges | Format `MM-DD..MM-DD`, comma-separated (e.g. `06-01..08-31, 12-20..01-05`) |
+| Flags | Skip / No Extra Bed / Day Cruise Only / GIT Only / Partial Price |
+
+### Import / Export
+
+- **💾 Export Config** — saves all templates + hotels as a JSON backup file
+- **📂 Import Config** — restores from a previously exported JSON
+- **🔄 Reset to Defaults** — reloads the 3 seed reference hotels and default templates
+
+---
+
+## City codes
+
+| Code | City |
+|---|---|
+| HN | Hà Nội |
+| NB | Ninh Bình |
+| SP | Sapa |
+| HL | Hạ Long |
+| DN | Đà Nẵng |
+| HA | Hội An |
+| HC | Hồ Chí Minh |
+| PQ | Phú Quốc |
+
+---
+
+## File structure
 
 ```
-Dear Hiếu,
-Please send the best itinerary & quotation for the following request.
-Markup 6%
-Travel Date: 31st May 2026
-No. of Pax: 13 Adults & 6 Children (9, 8, 4, 4, 3, 1.5 years)
-No. of Room: 6 Rooms on Double/Triple Sharing
-Trip Duration: 9N/10D
-Destination To Cover: 2N Hanoi + 1N Ha Long (Flight to Danang after Halong tour) + 3N Da Nang + 3N Ho Chi Minh
-Resort/Hotel Category: 3* and 4* Hotel
-Meal Plan: MAP
-Airport Transfer: PVT. Basis
-Best regards,
-Ms. Huyen (Helen)
-```
+index.html              Main app (Generator + Admin tabs)
+styles.css              All styles
+app.js                  State management, wizard logic, all step controllers
+favicon.svg             App icon
+package.json            npm scripts (serve only)
+README.md
 
-#### Resulting itinerary brief (copy into Step 3 → Paste Table to verify):
+admin/
+  admin-manager.js      Template & hotel CRUD, localStorage persistence, export/import
 
-```
-| Day 1 (Sun, 31st May 2026)   | Hanoi – Arrival                        | -/-/D |
-| Day 2 (Mon, 1st June 2026)   | Hanoi – City Tour                      | B/-/D |
-| Day 3 (Tue, 2nd June 2026)   | Ha Long Bay Cruise                     | -/-/D |
-| Day 4 (Wed, 3rd June 2026)   | Da Nang – Arrival                      | -/-/D |
-| Day 5 (Thu, 4th June 2026)   | Da Nang – Day Tour                     | B/-/D |
-| Day 6 (Fri, 5th June 2026)   | Da Nang – Day Tour                     | B/-/D |
-| Day 7 (Sat, 6th June 2026)   | Ho Chi Minh City – Arrival             | -/-/D |
-| Day 8 (Sun, 7th June 2026)   | Ho Chi Minh City – Tour                | B/-/D |
-| Day 9 (Mon, 8th June 2026)   | Ho Chi Minh City – Tour                | B/-/D |
-| Day 10 (Tue, 9th June 2026)  | Departure – Airport Transfer           | B/-/- |
+data/
+  hotels.js             Seed hotel data (new FIT/GIT/FOC/season schema)
+  templates.js          Itinerary templates grouped by city + CITY_LABELS
+
+lib/
+  brief-parser.js       Date helpers, city detection from title, meal utilities
+  detail-engine.js      Render day-by-day details HTML from templates
+  accommodation-engine.js  computeStays, pickRate (FIT/GIT + season), ECI/upgrade/FOC calculators
+  notes-engine.js       Auto-generate Notes / Includes / Excludes / Cancellation
+  docx-generator.js     Build and download .docx (docx.js v8.5.0 via CDN)
 ```
 
 ---
 
-### Option B — Manual Form
-
-### Generator Tab
-
-1. **Step 1 – General Info**: Tour title, dates, pax count, room type, meal plan  
-   — Changing **Date From** auto-recalculates date labels for all brief rows
-
-2. **Step 2 – Transport**: Car size (auto-suggested based on pax), shuttle/limo options, guide language
-
-3. **Step 3 – Itinerary Brief**:
-   - **Paste mode**: paste a Markdown table → click **Parse Table** → cities are auto-detected from row titles → switch to form view
-   - **Form mode**: manually add rows with **+ Thêm ngày** (or **🗑 Xóa tất cả** to clear)
-   - For each day: date label, title, meals (B/L/D/BR), city, template
-
-4. **Step 4 – Accommodation**: Cities auto-populate from brief. Three hotel tiers (3★ / 4★ / 5★):
-   - Select hotel per city, choose Low/High season rate (auto-calculates per-pax)
-   - Optional surcharges: early check-in (50% of rate), room upgrade (rate difference × nights)
-   - Only tiers with at least one selected hotel appear in the output
-
-5. Click **⚡ Generate Document** — full preview on the right panel
-
-6. **📋 Copy All** to paste into email / Word, or **⬇️ Download .docx** for a formatted Word file  
-   — The `.docx` accommodation table includes Rate/pax, VAT status, and surcharge rows
-
-### Admin Tab
-- **Templates**: Filter by city, Add / Edit / Delete. Editing with a different city moves the template.
-- **Hotels**: Filter by stars, Add / Edit / Delete. Fields: name, city, VAT, room type, rates, child share, extra bed, upgrade options, URL, flags (skip / noExtraBed / dayCruiseOnly / gitOnly / partialPrice)
-- **💾 Export Config**: Downloads `asia-mystika-config-YYYY-MM-DD.json`
-- **📂 Import Config**: Upload a previously exported JSON
-- **🔄 Reset to Defaults**: Restore Excel-parsed data
-
-## Re-parsing the Excel
-
-If `Bảng Của Hiếu.xlsx` is updated:
-
-```bash
-npm run parse-data
-# regenerates data/templates.js and data/hotels.js
-```
-
-## File Structure
-
-```
-index.html              Main app (2 tabs: Generator + Admin)
-styles.css              All styles
-app.js                  Main controller & state
-lib/
-  brief-parser.js       Parse pasted Markdown table, date labels, city detection
-  detail-engine.js      Map templates → detail HTML, accommodation note per day
-  accommodation-engine.js  Hotel selection UI, surcharge calc, output tables
-  notes-engine.js       Auto-generate Notes / Includes / Excludes / Cancellation
-  docx-generator.js     Build & download .docx (docx.js v8.5.0 CDN)
-admin/
-  admin-manager.js      Template & hotel CRUD, localStorage, export/import
-data/
-  templates.js          37 itinerary templates across 7 cities
-  hotels.js             33 hotels across 3 tiers (3★ / 4★ / 5★)
-scripts/
-  parse-excel.py        Bảng Của Hiếu.xlsx → data/templates.js + data/hotels.js
-favicon.svg             App icon
-```
-
-## Key Behaviours
-
-| Feature | Detail |
-|---|---|
-| State defaults | mealPlan=MAP, carSize auto-suggested (7s for ≤2 pax) |
-| City auto-detect | After paste, titles matched to city codes (HN/NB/SP/HL/DN/HC/PQ) |
-| Hotel auto-init | First available hotel selected per city/tier on load |
-| Surcharge recalc | ECI surcharge updates immediately when rate type (low↔high) changes |
-| Empty tier hiding | Tiers with no selected hotels omitted from both HTML preview and .docx |
-| VAT display | Per-hotel VAT flag shown inline in accommodation tables |
-| Tab switch | Returning to Generator refreshes hotel blocks with latest Admin data |
-
 ## Deployment
 
-Static HTML — no build step needed:
-- **Netlify / Vercel**: drag-and-drop the folder
-- **GitHub Pages**: push to repo, enable Pages
-- **Local network**: `python -m http.server 8000` on local IP for office use
+Static files — no server-side code needed:
+
+- **Local network (office)**: `python -m http.server 8000` on local IP
+- **Netlify / Vercel**: drag-and-drop the project folder
+- **GitHub Pages**: push to repo, enable Pages on the `main` branch

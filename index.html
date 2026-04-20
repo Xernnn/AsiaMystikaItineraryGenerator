@@ -30,47 +30,35 @@
 <main id="tab-generator" class="tab-content active">
   <div class="gen-layout">
 
-    <!-- ── LEFT: Steps ── -->
+    <!-- ── LEFT: Wizard steps ── -->
     <aside class="steps-panel">
 
-      <!-- Quick Parse -->
-      <div class="step-card" id="quickParseCard">
-        <div class="step-header quick-parse-header" id="quickParseToggle">
-          <span class="step-badge" style="background:var(--success)">⚡</span>
-          <span class="step-title" style="color:var(--success)">Quick Parse – Paste Request</span>
-          <span id="quickParseChevron" style="color:var(--text-muted);font-size:12px">▼</span>
-        </div>
-        <div class="step-body" id="quickParseBody">
-          <div class="field-group">
-            <label>Paste travel request email / brief</label>
-            <textarea id="requestPasteArea" rows="8" placeholder="Dear Hiếu,&#10;Travel Date: 31st May 2026&#10;No. of Pax: 13 Adults &amp; 6 Children (9, 8, 4, 4, 3, 1.5 years)&#10;No. of Room: 6 Rooms on Double/Triple Sharing&#10;Trip Duration: 9N/10D&#10;Destination To Cover: 2N Hanoi + 1N Ha Long + 3N Da Nang + 3N Ho Chi Minh&#10;Resort/Hotel Category: 3* and 4* Hotel&#10;Meal Plan: MAP"></textarea>
-          </div>
-          <button class="btn-primary" id="parseRequestBtn" style="width:100%">⚡ Parse &amp; Auto-fill All Steps</button>
-          <div id="parseWarnings" style="display:none;margin-top:8px;padding:8px 10px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:12px;color:#856404;white-space:pre-wrap"></div>
-        </div>
-      </div>
-
-      <!-- Step 1 -->
-      <div class="step-card" id="step1">
+      <!-- ────────────────────────────────── Step 1 ───── -->
+      <div class="step-card active" id="step1" data-step="1">
         <div class="step-header">
           <span class="step-badge">1</span>
-          <span class="step-title">Thông tin chung</span>
+          <span class="step-title">Thông tin chung (General Info)</span>
+          <span class="step-status" data-step-status="1"></span>
         </div>
         <div class="step-body">
           <div class="field-group">
             <label>Tên tour</label>
             <input type="text" id="tourTitle" placeholder="Best of Vietnam – 10D9N Vietnam (Hanoi, Halong, Danang…)" />
           </div>
+
           <div class="field-row">
             <div class="field-group">
               <label>Ngày đi (From)</label>
               <input type="date" id="dateFrom" />
+              <div class="date-preview" id="dateFromPreview">—</div>
             </div>
             <div class="field-group">
               <label>Ngày về (To)</label>
               <input type="date" id="dateTo" />
+              <div class="date-preview" id="dateToPreview">—</div>
             </div>
           </div>
+
           <div class="field-row">
             <div class="field-group">
               <label>Adults</label>
@@ -80,23 +68,13 @@
               <label>Children</label>
               <input type="number" id="children" min="0" value="0" />
             </div>
-            <div class="field-group">
-              <label>Rooms</label>
-              <input type="number" id="rooms" min="1" value="1" />
-            </div>
           </div>
           <div class="field-group" id="childAgesGroup" style="display:none">
             <label>Tuổi trẻ em (cách nhau bằng dấu phẩy)</label>
             <input type="text" id="childAges" placeholder="9, 8, 4, 4, 3, 1.5" />
+            <div class="helper-text">Chỉ trẻ em > 5 tuổi được tính vào pax để chọn loại xe.</div>
           </div>
-          <div class="field-group">
-            <label>Loại phòng</label>
-            <select id="roomType">
-              <option value="double">Double / Twin Room</option>
-              <option value="triple">Triple Room (Double + Extra Bed)</option>
-              <option value="family">Family Room (4 pax)</option>
-            </select>
-          </div>
+
           <div class="field-group">
             <label>Meal Plan</label>
             <select id="mealPlan">
@@ -105,19 +83,32 @@
               <option value="FB">Full Board – 3 meals</option>
             </select>
           </div>
+
+          <div class="field-group checkbox-field">
+            <label class="checkbox-inline">
+              <input type="checkbox" id="isIndian" />
+              <span>This is an <strong>Indian group</strong> (tagged on document)</span>
+            </label>
+          </div>
+
+          <div class="step-footer">
+            <button class="btn-confirm" data-confirm-step="1">Confirm &amp; Continue →</button>
+            <button class="btn-edit-step" data-edit-step="1" style="display:none">✏️ Edit Step 1</button>
+          </div>
         </div>
       </div>
 
-      <!-- Step 2 -->
-      <div class="step-card" id="step2">
+      <!-- ────────────────────────────────── Step 2 ───── -->
+      <div class="step-card locked" id="step2" data-step="2">
         <div class="step-header">
           <span class="step-badge">2</span>
-          <span class="step-title">Vận chuyển & Hướng dẫn</span>
+          <span class="step-title">Vận chuyển &amp; Hướng dẫn (Transport &amp; Guide)</span>
+          <span class="step-status" data-step-status="2"></span>
         </div>
         <div class="step-body">
           <div class="field-row">
             <div class="field-group">
-              <label>Loại xe</label>
+              <label>Loại xe (primary)</label>
               <select id="carSize">
                 <option value="7s">7-seater Private Car</option>
                 <option value="16s">16-seater Private Car</option>
@@ -131,13 +122,25 @@
               <div id="carSuggest" class="info-badge">—</div>
             </div>
           </div>
-          <div class="field-group">
-            <label>Guide language</label>
-            <select id="guideLanguage">
-              <option value="english">English speaking guide</option>
-              <option value="other">Other language (supplement applies)</option>
+
+          <div class="zone-picker" id="sapaZoneGroup" style="display:none">
+            <div class="zone-label">🚌 Sapa zone (limited to 16 &amp; 29 seater)</div>
+            <select id="sapaZoneCar">
+              <option value="16s">16-seater</option>
+              <option value="29s">29-seater</option>
+              <option value="split">Split: 1 × 29-seater + 1 × 16-seater</option>
             </select>
           </div>
+
+          <div class="zone-picker" id="pqRachVemGroup" style="display:none">
+            <div class="zone-label">🏝 Phu Quoc — Rach Vem zone (limited to 16 &amp; 29 seater)</div>
+            <select id="pqRachVemCar">
+              <option value="16s">16-seater</option>
+              <option value="29s">29-seater</option>
+              <option value="split">Split: 1 × 29-seater + 1 × 16-seater</option>
+            </select>
+          </div>
+
           <div class="field-row">
             <div class="field-group">
               <label>Shuttle Bus to Halong</label>
@@ -154,77 +157,103 @@
               </select>
             </div>
           </div>
+
+          <div class="helper-text">Guide is set per-day in Step 3 (Itinerary Brief).</div>
+
+          <div class="step-footer">
+            <button class="btn-confirm" data-confirm-step="2">Confirm &amp; Continue →</button>
+            <button class="btn-edit-step" data-edit-step="2" style="display:none">✏️ Edit Step 2</button>
+          </div>
         </div>
       </div>
 
-      <!-- Step 3 -->
-      <div class="step-card" id="step3">
+      <!-- ────────────────────────────────── Step 3 ───── -->
+      <div class="step-card locked" id="step3" data-step="3">
         <div class="step-header">
           <span class="step-badge">3</span>
           <span class="step-title">Itinerary Brief</span>
+          <span class="step-status" data-step-status="3"></span>
         </div>
         <div class="step-body">
-          <div class="brief-tabs">
-            <button class="brief-tab-btn active" data-btab="form">📋 Form</button>
-            <button class="brief-tab-btn" data-btab="paste">📄 Paste Table</button>
+          <div class="helper-text">
+            Rows auto-match day count from Step 1. Type an itinerary title — if it matches a saved template exactly it's applied automatically; otherwise closest matches appear as suggestions.
+          </div>
+          <div class="brief-grid-wrap">
+            <table class="brief-grid" id="briefGrid">
+              <thead>
+                <tr>
+                  <th style="width:100px">Day</th>
+                  <th>Itinerary</th>
+                  <th style="width:120px">Meals</th>
+                </tr>
+              </thead>
+              <tbody id="briefGridBody">
+                <tr>
+                  <td colspan="3" class="brief-grid-empty">Set dates in Step 1 to build the grid.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          <!-- Form mode -->
-          <div id="brief-form-mode" class="brief-mode active">
-            <div id="briefRowsContainer"></div>
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn-add-row" id="addBriefRow" style="flex:1;width:auto">+ Thêm ngày</button>
-              <button class="btn-secondary" id="clearBriefBtn" style="font-size:12px;white-space:nowrap">🗑 Xóa tất cả</button>
+          <!-- New template form — shown only when row has no matching template -->
+          <div id="newTemplateArea" class="new-template-area" style="display:none">
+            <div class="new-template-header">📝 Save this itinerary as a new template</div>
+            <div class="field-row">
+              <div class="field-group">
+                <label>City</label>
+                <select id="ntCity"></select>
+              </div>
+              <div class="field-group" style="flex:2">
+                <label>Template name (key)</label>
+                <input type="text" id="ntKey" placeholder="e.g. Hanoi – Old Quarter Walk" />
+              </div>
+            </div>
+            <div class="field-group">
+              <label>Detail text (activity schedule)</label>
+              <textarea id="ntText" rows="5" placeholder="08:00 – After breakfast at hotel…"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+              <button class="btn-secondary" id="ntCancelBtn">Cancel</button>
+              <button class="btn-primary" id="ntSaveBtn">💾 Save Template</button>
             </div>
           </div>
 
-          <!-- Paste mode -->
-          <div id="brief-paste-mode" class="brief-mode">
-            <label>Paste bảng Markdown vào đây:</label>
-            <textarea id="briefPasteArea" rows="12" placeholder="| Day 1 (Sun, 31st May 2026) | Hanoi Arrival – Hanoi Free &amp; Easy | -/-/D |&#10;| Day 2 (Mon, 1st June 2026) | Hanoi – Hanoi Full-day City Tour | B/L/- |"></textarea>
-            <button class="btn-primary" id="parseBriefBtn">🔍 Parse Table</button>
-          </div>
-
-          <!-- Brief preview -->
-          <div class="brief-preview-wrap" id="briefPreviewWrap" style="display:none">
-            <div class="section-label">Preview:</div>
-            <div id="briefTablePreview" class="brief-preview-table"></div>
+          <div class="step-footer">
+            <button class="btn-confirm" data-confirm-step="3">Confirm &amp; Continue →</button>
+            <button class="btn-edit-step" data-edit-step="3" style="display:none">✏️ Edit Step 3</button>
           </div>
         </div>
       </div>
 
-      <!-- Step 4 -->
-      <div class="step-card" id="step4">
+      <!-- ────────────────────────────────── Step 4 ───── -->
+      <div class="step-card locked" id="step4" data-step="4">
         <div class="step-header">
           <span class="step-badge">4</span>
-          <span class="step-title">Accommodation</span>
+          <span class="step-title">Accommodation (per stay)</span>
+          <span class="step-status" data-step-status="4"></span>
         </div>
         <div class="step-body">
-          <p class="step-hint">Destinations detected from your brief will appear here. Select hotels for each city.</p>
-          <div class="hotel-tiers">
-            <div class="hotel-tier-block" id="hotels3star">
-              <div class="tier-label">⭐⭐⭐ 3-Star Standard</div>
-              <div class="tier-cities" id="tier3Cities">
-                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
+          <div class="step4-toolbar">
+            <div class="field-group">
+              <label>Group type</label>
+              <div class="toggle-pill" id="groupTypeToggle">
+                <button type="button" class="pill-opt active" data-group="fit">FIT</button>
+                <button type="button" class="pill-opt" data-group="git">GIT</button>
               </div>
             </div>
-            <div class="hotel-tier-block" id="hotels4star">
-              <div class="tier-label">⭐⭐⭐⭐ 4-Star Standard</div>
-              <div class="tier-cities" id="tier4Cities">
-                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
-              </div>
-            </div>
-            <div class="hotel-tier-block" id="hotels5star">
-              <div class="tier-label">⭐⭐⭐⭐⭐ 5-Star / Deluxe</div>
-              <div class="tier-cities" id="tier5Cities">
-                <p class="no-dest-msg">Fill in the brief first to see available cities.</p>
-              </div>
-            </div>
+          </div>
+          <div id="staysContainer">
+            <p class="no-dest-msg">Finish Step 3 to see stays here.</p>
+          </div>
+
+          <div class="step-footer">
+            <button class="btn-confirm" data-confirm-step="4">Confirm &amp; Continue →</button>
+            <button class="btn-edit-step" data-edit-step="4" style="display:none">✏️ Edit Step 4</button>
           </div>
         </div>
       </div>
 
-      <!-- Generate button -->
+      <!-- Generate -->
       <div class="generate-btn-wrap">
         <button class="btn-generate" id="generateBtn">⚡ Generate Document</button>
       </div>
@@ -274,7 +303,6 @@
         <div class="city-filter-tabs" id="templateCityFilter"></div>
         <div id="templateList" class="item-list"></div>
 
-        <!-- Add/Edit Template Modal -->
         <div id="templateModal" class="modal" style="display:none">
           <div class="modal-box">
             <div class="modal-header">
@@ -343,10 +371,18 @@
                   <select id="hmCity"></select>
                 </div>
               </div>
+
               <div class="field-row">
                 <div class="field-group">
                   <label>Room Type</label>
                   <input type="text" id="hmRoomType" placeholder="Deluxe City View" />
+                </div>
+                <div class="field-group">
+                  <label>Currency</label>
+                  <select id="hmCurrency">
+                    <option value="USD">USD</option>
+                    <option value="VND">VND</option>
+                  </select>
                 </div>
                 <div class="field-group">
                   <label>VAT</label>
@@ -356,30 +392,65 @@
                   </select>
                 </div>
               </div>
-              <div class="field-row">
-                <div class="field-group">
-                  <label>Low Season Rate</label>
-                  <input type="text" id="hmLowRate" placeholder="850k / 32 USD" />
-                </div>
-                <div class="field-group">
-                  <label>High Season Rate</label>
-                  <input type="text" id="hmHighRate" placeholder="950k / 35 USD" />
-                </div>
-              </div>
-              <div class="field-row">
-                <div class="field-group">
-                  <label>Child Share (Ngủ chung)</label>
-                  <input type="text" id="hmChildShare" placeholder="150k / Free" />
-                </div>
-                <div class="field-group">
-                  <label>Extra Bed (Thêm Bed)</label>
-                  <input type="text" id="hmExtraBed" placeholder="300k / N/A" />
+
+              <div class="rate-matrix">
+                <div class="rate-matrix-label">Room rate matrix (per room / night)</div>
+                <div class="rate-matrix-grid">
+                  <div></div>
+                  <div class="rmh">Low season</div>
+                  <div class="rmh">High season</div>
+                  <div class="rmh">FIT</div>
+                  <div><input type="number" id="hmFitLow" step="0.01" placeholder="32" /></div>
+                  <div><input type="number" id="hmFitHigh" step="0.01" placeholder="35" /></div>
+                  <div class="rmh">GIT</div>
+                  <div><input type="number" id="hmGitLow" step="0.01" placeholder="28" /></div>
+                  <div><input type="number" id="hmGitHigh" step="0.01" placeholder="31" /></div>
                 </div>
               </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Extra Bed / night</label>
+                  <input type="number" id="hmExtraBed" step="0.01" placeholder="15" />
+                </div>
+                <div class="field-group">
+                  <label>Share Bed / night</label>
+                  <input type="number" id="hmShareBed" step="0.01" placeholder="3" />
+                </div>
+                <div class="field-group">
+                  <label>Early check-in (override)</label>
+                  <input type="number" id="hmEci" step="0.01" placeholder="(blank → 50% of rate)" />
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <label>Upgrade room name</label>
+                  <input type="text" id="hmUpgradeRoom" placeholder="Deluxe Mountain View" />
+                </div>
+                <div class="field-group">
+                  <label>Upgrade rate / night</label>
+                  <input type="number" id="hmUpgradeRate" step="0.01" placeholder="40" />
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <label>FOC rule — every N rooms</label>
+                  <input type="number" id="hmFocEvery" min="1" placeholder="20" />
+                </div>
+                <div class="field-group">
+                  <label>FOC rule — free rooms</label>
+                  <input type="number" id="hmFocFree" min="0" placeholder="1" />
+                </div>
+              </div>
+
               <div class="field-group">
-                <label>Upgrade Room Option (optional)</label>
-                <textarea id="hmUpgrade" rows="3" placeholder="Ocean View: +200k/night&#10;Junior Suite: +500k/night"></textarea>
+                <label>High-season ranges (format <code>MM-DD..MM-DD</code>, comma-separated)</label>
+                <input type="text" id="hmHighSeason" placeholder="06-01..08-31, 12-20..01-05" />
+                <div class="helper-text">Used to auto-switch rate between Low and High when a stay date falls inside any range.</div>
               </div>
+
               <div class="field-group">
                 <label>Hotel URL (optional)</label>
                 <input type="url" id="hmUrl" placeholder="https://hotel.com" />
@@ -406,7 +477,6 @@
   </div>
 </main>
 
-<!-- ════════════════════════════════════════ TOAST ═══ -->
 <div id="toast" class="toast"></div>
 
 <!-- docx.js: generates .docx files in the browser -->

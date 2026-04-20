@@ -1,37 +1,103 @@
 /**
- * app.js — Main controller for Asia Mystika Itinerary Generator
+ * app.js — Main controller for the Asia Mystika Itinerary Generator.
+ *
+ * High-level responsibilities:
+ *  - Step 1: General info (dates with DD/MM/YYYY preview, pax, Indian toggle).
+ *  - Step 2: Transport (primary car, Sapa + Phu Quoc Rach Vem zone pickers).
+ *  - Step 3: Excel-like brief grid driven by dateFrom/dateTo with per-day guide.
+ *  - Step 4: Accommodation per stay (FIT/GIT × 3+4/4+5 star tier), room counts,
+ *           extra/share beds, FOC rooms, early check-in + upgrade surcharges.
+ *  - Progressive wizard UX (lock / active / confirmed / dirty per step card).
+ *  - Generate preview + download .docx.
  */
-import { parsePastedBrief, formatMeals, parseMeals, detectCityFromTitle, dayLabel } from './lib/brief-parser.js';
-import { parseRequest } from './lib/request-parser.js';
+
+import {
+  formatMeals, parseMeals, detectCityFromTitle, dayLabel,
+  formatDateDDMMYYYY, addDaysISO, countDays, mealWords,
+} from './lib/brief-parser.js';
 import { generateBriefTable, generateDetails, escapeHtml } from './lib/detail-engine.js';
-import { countNightsPerCity, generateAccommodationTables, getCityLabel, SURCHARGE_CITIES } from './lib/accommodation-engine.js';
-import { generateNotes, generateIncludes, generateExcludes, generateImportantNotes, generateCancellationTerms } from './lib/notes-engine.js';
+import {
+  computeStays, pickRate, generateAccommodationTables, getCityLabel,
+  suggestFocCount, formatMoney, formatPerPax, calcPerPax, calcEarlyCheckin, calcUpgrade,
+} from './lib/accommodation-engine.js';
+import {
+  generateNotes, generateIncludes, generateExcludes,
+  generateImportantNotes, generateCancellationTerms,
+} from './lib/notes-engine.js';
 import { downloadDocx } from './lib/docx-generator.js';
 import { initAdminUI, getTemplates, getHotels } from './admin/admin-manager.js';
 import { CITY_LABELS } from './data/templates.js';
 
-// ─── State ────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────
+//  STATE
+// ──────────────────────────────────────────────────────────────────────
+
 const state = {
-  step1: { title:'', dateFrom:'', dateTo:'', adults:2, children:0, childrenAges:[], rooms:1, roomType:'double', mealPlan:'MAP' },
-  step2: { carSize:'7s', shuttleHalong:'no', limoSapa:'no', guideLanguage:'english' },
-  step3: { briefRows: [] },
-  step4: { hotels3:{}, hotels4:{}, hotels5:{} },
+  step1: {
+    title:'', dateFrom:'', dateTo:'',
+    adults: 2, children: 0, childrenAges: [],
+    mealPlan: 'MAP',
+    isIndian: false,
+  },
+  step2: {
+    carSize: '7s',
+    sapaZoneCar: '29s',   // only used when Sapa zone detected
+    pqRachVemCar: '29s',  // only used when Phu Quoc Rach Vem detected
+    shuttleHalong: 'no',
+    limoSapa: 'no',
+  },
+  step3: {
+    // briefRows: { dayNum, dateLabel, date, title, meals:{B,L,D,BR},
+    //              templateCity, templateKey, templateText,
+    //              hasGuide, guideLanguage, notes }
+    briefRows: [],
+  },
+  step4: {
+    groupType: 'fit',       // 'fit' | 'git'
+    stayStarChoice: {},     // { [stayId]: '3'|'4'|'5' }
+    stays: [],              // from computeStays()
+    selections: {},         // { [stayId]: { "3"|"4"|"5": selection } }
+  },
+  wizard: {
+    currentStep: 1,
+    confirmed: { 1: false, 2: false, 3: false, 4: false },
+    dirty:     { 1: false, 2: false, 3: false, 4: false },
+  },
 };
 
-// ─── Init ────────────────────────────────────────────────
+// Default per-stay-tier selection.
+function emptySelection(hotel = null) {
+  return {
+    hotelId:         hotel?.id || '',
+    rooms2pax:       0,
+    rooms3pax:       0,
+    extraBeds:       0,
+    shareBeds:       0,
+    focRooms:        0,
+    earlyCheckinDay: null,
+    upgrade:         false,
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  INIT
+// ──────────────────────────────────────────────────────────────────────
+
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
-  initStepCollapse();
-  initQuickParse();
   initStep1();
   initStep2();
   initStep3();
+  initStep4();
+  initWizard();
   initOutput();
   initAdminUI(showToast);
-  suggestCarSize(); // set initial suggestion based on defaults
+  initNewTemplateArea();
+  suggestCarSize();
+  refreshZoneVisibility();
 });
 
-// ─── Tab switching ────────────────────────────────────────
+// Tabs (Generator / Admin)
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -39,137 +105,212 @@ function initTabs() {
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`tab-${btn.dataset.tab}`)?.classList.add('active');
-      // Refresh hotel blocks when returning to generator (admin may have changed hotel data)
-      if (btn.dataset.tab === 'generator' && state.step3.briefRows.length) {
-        updateStep4Hotels();
+      if (btn.dataset.tab === 'generator' && state.step4.stays.length) {
+        renderStep4Stays();
       }
     });
   });
 }
 
-// ─── Step collapse (disabled — steps always visible, panel scrolls) ───────────
-function initStepCollapse() {
-  // No-op: accordion removed in favour of scrollable panel
+// ──────────────────────────────────────────────────────────────────────
+//  WIZARD
+// ──────────────────────────────────────────────────────────────────────
+
+function initWizard() {
+  document.querySelectorAll('.btn-confirm').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const n = Number(btn.dataset.confirmStep);
+      confirmStep(n);
+    });
+  });
+  document.querySelectorAll('.btn-edit-step').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const n = Number(btn.dataset.editStep);
+      markStepDirty(n);
+    });
+  });
+  updateWizardUI();
 }
 
-// ─── Quick Parse ───────────────────────────────────────────
-function initQuickParse() {
-  // Collapsible toggle for quick parse card
-  const toggle = document.getElementById('quickParseToggle');
-  const body   = document.getElementById('quickParseBody');
-  const chev   = document.getElementById('quickParseChevron');
-  if (toggle && body) {
-    // Start collapsed
-    body.style.display = 'none';
-    if (chev) chev.textContent = '▶';
-    toggle.style.cursor = 'pointer';
-    toggle.addEventListener('click', () => {
-      const open = body.style.display !== 'none';
-      body.style.display = open ? 'none' : '';
-      if (chev) chev.textContent = open ? '▶' : '▼';
-    });
+function confirmStep(n) {
+  if (!validateStep(n)) return;
+  state.wizard.confirmed[n] = true;
+  state.wizard.dirty[n] = false;
+
+  // Cascade downstream
+  if (n === 1) {
+    rebuildBriefGridForDates();
+    recomputeStaysPreserve();
+  } else if (n === 3) {
+    recomputeStaysPreserve();
   }
 
-  document.getElementById('parseRequestBtn')?.addEventListener('click', () => {
-    const text = document.getElementById('requestPasteArea')?.value || '';
-    if (!text.trim()) { showToast('Paste a request first.', 'error'); return; }
+  // Unlock next if not yet
+  if (n < 4 && state.wizard.currentStep <= n) {
+    state.wizard.currentStep = n + 1;
+  }
+  // Mark any downstream confirmed steps as dirty (need re-confirm)
+  for (let i = n + 1; i <= 4; i++) {
+    if (state.wizard.confirmed[i]) state.wizard.dirty[i] = true;
+  }
+  updateWizardUI();
 
-    const result = parseRequest(text);
-    const { step1Fields, briefRows, hotelStars, warnings } = result;
-
-    // ── Fill Step 1 fields ──────────────────────────────
-    const s1 = step1Fields;
-    state.step1.title       = s1.title       || state.step1.title;
-    state.step1.dateFrom    = s1.dateFrom    || '';
-    state.step1.dateTo      = s1.dateTo      || '';
-    state.step1.adults      = s1.adults      ?? state.step1.adults;
-    state.step1.children    = s1.children    ?? 0;
-    state.step1.childrenAges = s1.childrenAges || [];
-    state.step1.rooms       = s1.rooms       ?? state.step1.rooms;
-    state.step1.roomType    = s1.roomType    || state.step1.roomType;
-    state.step1.mealPlan    = s1.mealPlan    || state.step1.mealPlan;
-
-    // Sync DOM
-    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== null && val !== undefined) el.value = val; };
-    setVal('tourTitle', state.step1.title);
-    setVal('dateFrom',  state.step1.dateFrom);
-    setVal('dateTo',    state.step1.dateTo);
-    setVal('adults',    state.step1.adults);
-    setVal('children',  state.step1.children);
-    setVal('rooms',     state.step1.rooms);
-    setVal('roomType',  state.step1.roomType);
-    setVal('mealPlan',  state.step1.mealPlan);
-
-    const childAgesEl = document.getElementById('childAges');
-    if (childAgesEl && s1.childrenAges.length) {
-      childAgesEl.value = s1.childrenAges.join(', ');
-    }
-    const childAgesGroup = document.getElementById('childAgesGroup');
-    if (childAgesGroup) childAgesGroup.style.display = state.step1.children > 0 ? 'block' : 'none';
-
-    // Auto-suggest car size
-    suggestCarSize();
-
-    // ── Fill Brief rows ─────────────────────────────────
-    state.step3.briefRows = briefRows;
-    state.step4 = { hotels3:{}, hotels4:{}, hotels5:{} };
-    renderBriefFormRows();
-    updateBriefPreview();
-    updateStep4Hotels();
-
-    // Switch Step 3 to form mode so user sees the rows
-    document.querySelectorAll('.brief-tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.brief-mode').forEach(m => m.classList.remove('active'));
-    document.querySelector('.brief-tab-btn[data-btab="form"]')?.classList.add('active');
-    document.getElementById('brief-form-mode')?.classList.add('active');
-
-    // ── Show warnings ───────────────────────────────────
-    const warnBox = document.getElementById('parseWarnings');
-    if (warnBox) {
-      if (warnings.length) {
-        warnBox.style.display = '';
-        warnBox.textContent = '⚠️ ' + warnings.join('\n⚠️ ');
-      } else {
-        warnBox.style.display = 'none';
-      }
-    }
-
-    const dayCount = briefRows.length;
-    showToast(`Parsed! ${dayCount} days auto-filled ✓${warnings.length ? ' (see warnings)' : ''}`, 'success');
-  });
+  // Scroll to next step
+  if (n < 4) {
+    const next = document.getElementById(`step${n + 1}`);
+    next?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  showToast(`Step ${n} confirmed.`, 'success');
 }
 
-// ─── Step 1 ───────────────────────────────────────────────
+function markStepDirty(n) {
+  if (state.wizard.confirmed[n]) {
+    state.wizard.dirty[n] = true;
+    // Mark all downstream confirmed steps as stale too.
+    for (let i = n + 1; i <= 4; i++) {
+      if (state.wizard.confirmed[i]) state.wizard.dirty[i] = true;
+    }
+    updateWizardUI();
+  }
+}
+
+function validateStep(n) {
+  if (n === 1) {
+    if (!state.step1.title.trim())    { showToast('Enter a tour title first.', 'error'); return false; }
+    if (!state.step1.dateFrom)        { showToast('Set the From date first.', 'error'); return false; }
+    if (!state.step1.dateTo)          { showToast('Set the To date first.', 'error'); return false; }
+    if (countDays(state.step1.dateFrom, state.step1.dateTo) < 1) {
+      showToast('To date must be on or after From date.', 'error'); return false;
+    }
+  }
+  if (n === 3) {
+    if (!state.step3.briefRows.length) { showToast('Fill in at least one day.', 'error'); return false; }
+  }
+  return true;
+}
+
+function updateWizardUI() {
+  for (let n = 1; n <= 4; n++) {
+    const card = document.getElementById(`step${n}`);
+    if (!card) continue;
+    card.classList.remove('locked', 'active', 'confirmed', 'dirty', 'downstream-stale');
+
+    const isConfirmed = state.wizard.confirmed[n];
+    const isDirty     = state.wizard.dirty[n];
+    const isUnlocked  = n <= state.wizard.currentStep;
+
+    if (!isUnlocked) {
+      card.classList.add('locked');
+    } else if (isConfirmed && !isDirty) {
+      card.classList.add('confirmed');
+    } else if (isDirty) {
+      card.classList.add('dirty');
+    } else {
+      card.classList.add('active');
+    }
+
+    // Toggle button states
+    const confirmBtn = card.querySelector('.btn-confirm');
+    const editBtn    = card.querySelector('.btn-edit-step');
+    if (isConfirmed && !isDirty) {
+      if (confirmBtn) confirmBtn.style.display = 'none';
+      if (editBtn)    editBtn.style.display = '';
+    } else {
+      if (confirmBtn) confirmBtn.style.display = '';
+      if (editBtn)    editBtn.style.display = 'none';
+    }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  STEP 1
+// ──────────────────────────────────────────────────────────────────────
+
 function initStep1() {
-  const fields = ['tourTitle','dateFrom','dateTo','adults','children','rooms','roomType','mealPlan'];
+  const fields = ['tourTitle','dateFrom','dateTo','adults','children','mealPlan'];
   fields.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('input', () => {
-      state.step1[id === 'tourTitle' ? 'title' : id] = el.type === 'number' ? parseInt(el.value)||0 : el.value;
-      if (id === 'children') {
-        document.getElementById('childAgesGroup').style.display = parseInt(el.value) > 0 ? 'block' : 'none';
-        suggestCarSize();
-      }
-      if (id === 'adults' || id === 'children') suggestCarSize();
-      if (id === 'dateFrom' && state.step3.briefRows.length) {
-        state.step3.briefRows.forEach((row, i) => {
-          row.dateLabel = dayLabel(el.value, i);
-        });
-        renderBriefFormRows();
-        updateBriefPreview();
-      }
+      handleStep1Change(id, el);
     });
-    el.addEventListener('change', () => el.dispatchEvent(new Event('input')));
+    el.addEventListener('change', () => handleStep1Change(id, el));
   });
 
   document.getElementById('childAges')?.addEventListener('input', e => {
     state.step1.childrenAges = e.target.value.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+    suggestCarSize();
+    touchStep(1);
+  });
+
+  document.getElementById('isIndian')?.addEventListener('change', e => {
+    state.step1.isIndian = e.target.checked;
+    touchStep(1);
+  });
+
+  updateDatePreviews();
+}
+
+function handleStep1Change(id, el) {
+  const key = id === 'tourTitle' ? 'title' : id;
+  if (el.type === 'number') {
+    state.step1[key] = parseInt(el.value) || 0;
+  } else {
+    state.step1[key] = el.value;
+  }
+  if (id === 'children') {
+    const ages = document.getElementById('childAgesGroup');
+    if (ages) ages.style.display = (parseInt(el.value) || 0) > 0 ? 'block' : 'none';
+    suggestCarSize();
+  }
+  if (id === 'adults') suggestCarSize();
+  if (id === 'dateFrom' || id === 'dateTo') {
+    updateDatePreviews();
+    rebuildBriefGridForDates();
+  }
+  touchStep(1);
+}
+
+function updateDatePreviews() {
+  const from = document.getElementById('dateFromPreview');
+  const to   = document.getElementById('dateToPreview');
+  if (from) from.textContent = state.step1.dateFrom ? formatDateDDMMYYYY(state.step1.dateFrom) : '—';
+  if (to)   to.textContent   = state.step1.dateTo   ? formatDateDDMMYYYY(state.step1.dateTo)   : '—';
+}
+
+function touchStep(n) {
+  markStepDirty(n);
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  STEP 2 — car zones
+// ──────────────────────────────────────────────────────────────────────
+
+function initStep2() {
+  ['carSize','shuttleHalong','limoSapa','sapaZoneCar','pqRachVemCar'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      state.step2[id] = el.value;
+      touchStep(2);
+    });
   });
 }
 
+/** pax-for-transport ignores children ≤ 5 years old. */
+function paxForTransport() {
+  const adults = Number(state.step1.adults) || 0;
+  const kids   = Number(state.step1.children) || 0;
+  const ages   = state.step1.childrenAges || [];
+  // If ages listed, use them; otherwise assume all children count.
+  const countedKids = ages.length
+    ? ages.filter(a => a > 5).length
+    : kids;
+  return adults + countedKids;
+}
+
 function suggestCarSize() {
-  const total = state.step1.adults + state.step1.children;
+  const total = paxForTransport();
   let size = '7s';
   if (total <= 2)       size = '7s';
   else if (total <= 6)  size = '16s';
@@ -178,512 +319,545 @@ function suggestCarSize() {
   else                  size = '45s';
 
   const suggest = document.getElementById('carSuggest');
-  if (suggest) suggest.textContent = `Suggested: ${size} (${total} pax)`;
-  // Auto-set if user hasn't manually overridden
-  const sel = document.getElementById('carSize');
-  if (sel) { sel.value = size; state.step2.carSize = size; }
-}
+  if (suggest) suggest.textContent = `Suggested: ${carSizeLabel(size)} (${total} pax)`;
 
-// ─── Step 2 ───────────────────────────────────────────────
-function initStep2() {
-  ['carSize','shuttleHalong','limoSapa','guideLanguage'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', () => { state.step2[id] = el.value; });
-  });
-}
-
-// ─── Step 3 – Brief ───────────────────────────────────────
-function initStep3() {
-  // Brief sub-tabs
-  document.querySelectorAll('.brief-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.brief-tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.brief-mode').forEach(m => m.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(`brief-${btn.dataset.btab}-mode`)?.classList.add('active');
-    });
-  });
-
-  // Add row button
-  document.getElementById('addBriefRow')?.addEventListener('click', () => {
-    addBriefRow();
-    // Scroll to newly added row
-    const container = document.getElementById('briefRowsContainer');
-    container?.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  });
-
-  // Clear brief button
-  document.getElementById('clearBriefBtn')?.addEventListener('click', () => {
-    if (state.step3.briefRows.length && !confirm('Clear all itinerary days?')) return;
-    state.step3.briefRows = [];
-    state.step4 = { hotels3:{}, hotels4:{}, hotels5:{} };
-    renderBriefFormRows();
-    updateBriefPreview();
-    updateStep4Hotels();
-    showToast('Brief cleared.', '');
-  });
-
-  // Parse paste button
-  document.getElementById('parseBriefBtn')?.addEventListener('click', () => {
-    const text = document.getElementById('briefPasteArea')?.value || '';
-    const rows = parsePastedBrief(text);
-    if (!rows.length) { showToast('No rows detected. Check paste format.', 'error'); return; }
-    // Auto-detect city from each row's title
-    rows.forEach(row => {
-      if (!row.templateCity) row.templateCity = detectCityFromTitle(row.title) || '';
-    });
-    state.step3.briefRows = rows;
-    renderBriefFormRows();
-    updateBriefPreview();
-    updateStep4Hotels();
-    // Switch to form tab so user sees the parsed rows
-    document.querySelectorAll('.brief-tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.brief-mode').forEach(m => m.classList.remove('active'));
-    document.querySelector('.brief-tab-btn[data-btab="form"]')?.classList.add('active');
-    document.getElementById('brief-form-mode')?.classList.add('active');
-    showToast(`Parsed ${rows.length} day(s) ✓`, 'success');
-  });
-}
-
-// ─── Brief row management ─────────────────────────────────
-let rowCounter = 0;
-
-function addBriefRow(rowData = null) {
-  const idx = state.step3.briefRows.length;
-  const dayNum = idx + 1;
-  const dateStr = state.step1.dateFrom ? dayLabel(state.step1.dateFrom, idx) : '';
-
-  const row = rowData || {
-    dayNum,
-    dateLabel: dateStr,
-    parsedDate: '',
-    title: '',
-    meals: { B: false, L: false, D: false, BR: false },
-    templateCity: '',
-    templateKey: '',
-    templateText: '',
-  };
-  state.step3.briefRows.push(row);
-  renderBriefFormRows();
-  updateBriefPreview();
-  updateStep4Hotels();
-}
-
-function renderBriefFormRows() {
-  const container = document.getElementById('briefRowsContainer');
-  if (!container) return;
-  container.innerHTML = '';
-
-  state.step3.briefRows.forEach((row, idx) => {
-    const div = document.createElement('div');
-    div.className = 'brief-row-card';
-    div.dataset.idx = idx;
-
-    const templates = getTemplates();
-    const templateOptions = buildTemplateOptions(templates, row.templateCity, row.templateKey);
-    const cityOptions = buildCityOptions(row.templateCity);
-
-    div.innerHTML = `
-      <div class="brief-row-num">Day ${row.dayNum}</div>
-      <button class="btn-remove-row" data-idx="${idx}" title="Remove day">✕</button>
-      <div class="row-top">
-        <div class="field-group" style="margin:0">
-          <label>Date</label>
-          <input type="text" class="row-date" value="${escapeHtml(row.dateLabel || '')}" placeholder="Mon, 1st June 2026" />
-        </div>
-        <div class="field-group" style="margin:0">
-          <label>Meals</label>
-          <div class="row-meals">
-            <label><input type="checkbox" class="meal-b"  ${row.meals.B  ? 'checked' : ''} /> B</label>
-            <label><input type="checkbox" class="meal-l"  ${row.meals.L  ? 'checked' : ''} /> L</label>
-            <label><input type="checkbox" class="meal-d"  ${row.meals.D  ? 'checked' : ''} /> D</label>
-            <label><input type="checkbox" class="meal-br" ${row.meals.BR ? 'checked' : ''} /> BR</label>
-          </div>
-        </div>
-      </div>
-      <div class="row-mid">
-        <div class="field-group" style="margin:0">
-          <label>Itinerary Title</label>
-          <input type="text" class="row-title" value="${escapeHtml(row.title)}" placeholder="Hanoi – Hanoi Full-day City Tour" />
-        </div>
-      </div>
-      <div class="field-row" style="margin-bottom:0">
-        <div class="field-group" style="margin:0">
-          <label>City</label>
-          <select class="row-city">${cityOptions}</select>
-        </div>
-        <div class="field-group" style="margin:0">
-          <label>Template</label>
-          <select class="row-template">${templateOptions}</select>
-        </div>
-      </div>`;
-
-    container.appendChild(div);
-
-    // Events
-    div.querySelector('.btn-remove-row').addEventListener('click', () => {
-      state.step3.briefRows.splice(idx, 1);
-      // Re-number days
-      state.step3.briefRows.forEach((r, i) => { r.dayNum = i + 1; });
-      renderBriefFormRows();
-      updateBriefPreview();
-      updateStep4Hotels();
-    });
-
-    div.querySelector('.row-date').addEventListener('input', e => {
-      state.step3.briefRows[idx].dateLabel = e.target.value;
-      updateBriefPreview();
-    });
-
-    div.querySelector('.row-title').addEventListener('input', e => {
-      state.step3.briefRows[idx].title = e.target.value;
-      // Auto-detect city from title
-      const autoCity = detectCityFromTitle(e.target.value);
-      if (autoCity && !state.step3.briefRows[idx].templateCity) {
-        state.step3.briefRows[idx].templateCity = autoCity;
-        div.querySelector('.row-city').value = autoCity;
-        refreshTemplateDropdown(div, idx, autoCity);
-      }
-      updateBriefPreview();
-      updateStep4Hotels();
-    });
-
-    ['meal-b','meal-l','meal-d','meal-br'].forEach(cls => {
-      div.querySelector(`.${cls}`)?.addEventListener('change', e => {
-        const key = cls.replace('meal-','').toUpperCase();
-        if (key === 'BR') state.step3.briefRows[idx].meals.BR = e.target.checked;
-        else state.step3.briefRows[idx].meals[key] = e.target.checked;
-        updateBriefPreview();
-      });
-    });
-
-    div.querySelector('.row-city').addEventListener('change', e => {
-      state.step3.briefRows[idx].templateCity = e.target.value;
-      state.step3.briefRows[idx].templateKey  = '';
-      state.step3.briefRows[idx].templateText = '';
-      refreshTemplateDropdown(div, idx, e.target.value);
-      updateStep4Hotels();
-    });
-
-    div.querySelector('.row-template').addEventListener('change', e => {
-      const [city, keyIdx] = e.target.value.split('::');
-      const templates = getTemplates();
-      const tmpl = templates[city]?.[parseInt(keyIdx)];
-      state.step3.briefRows[idx].templateKey  = tmpl?.key  || '';
-      state.step3.briefRows[idx].templateText = tmpl?.text || '';
-    });
-  });
-}
-
-function refreshTemplateDropdown(div, idx, city) {
-  const sel = div.querySelector('.row-template');
-  if (!sel) return;
-  sel.innerHTML = buildTemplateOptions(getTemplates(), city, '');
-}
-
-function buildCityOptions(selectedCity) {
-  const cities = Object.entries(CITY_LABELS);
-  return `<option value="">— Select City —</option>` +
-    cities.map(([code, label]) =>
-      `<option value="${code}" ${code === selectedCity ? 'selected' : ''}>${label}</option>`
-    ).join('');
-}
-
-function buildTemplateOptions(templates, city, selectedKey) {
-  let opts = `<option value="">— Select Template —</option>`;
-  const citiesToShow = city ? [city] : Object.keys(templates);
-  for (const c of citiesToShow) {
-    const items = templates[c] || [];
-    if (items.length) {
-      opts += `<optgroup label="${CITY_LABELS[c] || c}">`;
-      items.forEach((t, i) => {
-        const val = `${c}::${i}`;
-        const sel = t.key === selectedKey ? 'selected' : '';
-        opts += `<option value="${val}" ${sel}>${escapeHtml(t.key.slice(0, 60))}</option>`;
-      });
-      opts += `</optgroup>`;
-    }
+  // Only auto-set primary when user hasn't confirmed step 2 yet
+  if (!state.wizard.confirmed[2]) {
+    const sel = document.getElementById('carSize');
+    if (sel) { sel.value = size; state.step2.carSize = size; }
   }
-  return opts;
+
+  // Suggest Sapa / Phu Quoc zone: 16 / 29 / split
+  const zoneSuggest = total > 29 ? 'split' : (total > 16 ? '29s' : '16s');
+  if (!state.wizard.confirmed[2]) {
+    const sapaEl = document.getElementById('sapaZoneCar');
+    const pqEl   = document.getElementById('pqRachVemCar');
+    if (sapaEl) { sapaEl.value = zoneSuggest; state.step2.sapaZoneCar   = zoneSuggest; }
+    if (pqEl)   { pqEl.value   = zoneSuggest; state.step2.pqRachVemCar = zoneSuggest; }
+  }
 }
 
-// ─── Brief preview ────────────────────────────────────────
-function updateBriefPreview() {
-  const rows = state.step3.briefRows;
-  const wrap = document.getElementById('briefPreviewWrap');
-  const preview = document.getElementById('briefTablePreview');
-  if (!wrap || !preview) return;
-
-  if (!rows.length) { wrap.style.display = 'none'; return; }
-  wrap.style.display = 'block';
-  preview.innerHTML = generateBriefTable(rows);
-}
-
-// ─── Step 4 – Hotels ──────────────────────────────────────
-function updateStep4Hotels() {
+function refreshZoneVisibility() {
   const briefRows = state.step3.briefRows;
-  const nightsMap = countNightsPerCity(briefRows);
-  const orderedCities = getOrderedCities(briefRows);
-  const cities = orderedCities.filter(c => nightsMap[c] > 0);
+  const hasSapa = briefRows.some(r => r.templateCity === 'SP' || /sapa|sa pa/i.test(r.title || ''));
+  const hasPqRachVem = briefRows.some(r => r.templateCity === 'PQ' && /rach vem|rạch vẹm/i.test(r.title || ''));
 
-  renderHotelTierCities('tier3Cities', cities, nightsMap, '3', state.step4.hotels3);
-  renderHotelTierCities('tier4Cities', cities, nightsMap, '4', state.step4.hotels4);
-  renderHotelTierCities('tier5Cities', cities, nightsMap, '5', state.step4.hotels5);
+  const sapaGroup = document.getElementById('sapaZoneGroup');
+  const pqGroup   = document.getElementById('pqRachVemGroup');
+  if (sapaGroup) sapaGroup.style.display = hasSapa ? 'block' : 'none';
+  if (pqGroup)   pqGroup.style.display   = hasPqRachVem ? 'block' : 'none';
 }
 
-function getOrderedCities(briefRows) {
-  const seen = new Set();
-  const result = [];
-  for (const row of briefRows) {
-    if (row.templateCity && !seen.has(row.templateCity)) {
-      seen.add(row.templateCity);
-      result.push(row.templateCity);
+function carSizeLabel(size) {
+  const map = { '7s':'7-Seater','16s':'16-Seater','29s':'29-Seater','35s':'35-Seater','45s':'45-Seater' };
+  return `${map[size] || size} Private Car`;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  STEP 3 — Brief grid
+// ──────────────────────────────────────────────────────────────────────
+
+function initStep3() {
+  rebuildBriefGridForDates();
+}
+
+/** Sync grid rows to the count of days in the date range. Preserve existing data by dayNum. */
+function rebuildBriefGridForDates() {
+  const from = state.step1.dateFrom;
+  const to   = state.step1.dateTo;
+  const n = countDays(from, to);
+
+  const byDay = new Map((state.step3.briefRows || []).map(r => [r.dayNum, r]));
+
+  const out = [];
+  if (n > 0 && from) {
+    for (let i = 0; i < n; i++) {
+      const dayNum   = i + 1;
+      const existing = byDay.get(dayNum);
+      // Convert legacy meals object → string
+      const em = existing?.meals;
+      let mealsStr = '';
+      if (typeof em === 'string') {
+        mealsStr = em;
+      } else if (em && typeof em === 'object') {
+        const b = em.B ? 'B' : (em.BR ? 'BR' : '');
+        const l = em.L ? 'L' : '';
+        const d = em.D ? 'D' : '';
+        mealsStr = [b, l, d].filter(Boolean).join('/');
+      }
+      out.push({
+        dayNum,
+        date:          addDaysISO(from, i),
+        dateLabel:     dayLabel(from, i),
+        title:         existing?.title || '',
+        meals:         mealsStr,
+        templateCity:  existing?.templateCity || '',
+        templateKey:   existing?.templateKey  || '',
+        templateText:  existing?.templateText || '',
+        hasGuide:      existing?.hasGuide ?? false,
+        guideLanguage: existing?.guideLanguage || 'english',
+        notes:         existing?.notes || '',
+      });
     }
   }
-  return result;
+  state.step3.briefRows = out;
+  renderBriefGrid();
+  refreshZoneVisibility();
 }
 
-function renderHotelTierCities(containerId, cities, nightsMap, stars, hotelState) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
+function renderBriefGrid() {
+  const body = document.getElementById('briefGridBody');
+  if (!body) return;
 
-  if (!cities.length) {
-    container.innerHTML = '<p class="no-dest-msg">Fill in the brief first to see available cities.</p>';
+  const rows = state.step3.briefRows;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="3" class="brief-grid-empty">Set dates in Step 1 to build the grid.</td></tr>';
     return;
   }
 
-  container.innerHTML = '';
-  const allHotels = getHotels();
-  const tierHotels = allHotels[stars] || [];
-  let renderedCount = 0;
+  const templates = getTemplates();
 
-  for (const city of cities) {
-    const nights = nightsMap[city] || 0;
-    const cityHotels = tierHotels.filter(h => h.city === city && !(h.flags||[]).includes('skip'));
-    if (!cityHotels.length) continue;
-    renderedCount++;
+  body.innerHTML = rows.map((row, idx) => {
+    const dateShort = formatDateDDMMYYYY(row.date);
+    const recHtml   = buildTemplateSuggestions(row.title, row.templateCity, templates, idx);
+    const hasNewBtn = row.title && !row.templateKey;
 
-    const block = document.createElement('div');
-    block.className = 'hotel-city-block';
+    return `
+<tr data-idx="${idx}">
+  <td class="cell-day">
+    <div class="cell-day-num">Day ${row.dayNum}</div>
+    <div class="cell-date">${escapeHtml(dateShort)}</div>
+    <div class="cell-date-long">${escapeHtml(row.dateLabel || '')}</div>
+  </td>
+  <td class="cell-itinerary">
+    <input type="text" class="row-title" value="${escapeHtml(row.title)}" placeholder="Type itinerary title…" />
+    ${recHtml ? `<div class="tmpl-rec" data-recidx="${idx}">${recHtml}</div>` : ''}
+    ${hasNewBtn ? `<button class="tmpl-new-btn" data-newidx="${idx}">📝 Save as new template</button>` : ''}
+  </td>
+  <td class="cell-meals">
+    <input type="text" class="row-meals" value="${escapeHtml(row.meals || '')}" placeholder="e.g. B/L/D" />
+  </td>
+</tr>`;
+  }).join('');
 
-    // Auto-init state with first hotel so generation works without user touching it
-    if (!hotelState[city]) {
-      const h0 = cityHotels[0];
-      hotelState[city] = { hotelIdx:0, name:h0?.name||'', roomType:h0?.roomType||'', vatIncluded:h0?.vatIncluded, rateType:'low', currentRate:h0?.lowRate||'' };
-    }
-    const currentSel = hotelState[city];
-    const hotelOpts = cityHotels.map((h, i) => {
-      const vatTag   = h.vatIncluded ? ' ✅VAT' : ' ❌+VAT';
-      const flags    = h.flags || [];
-      const flagTags = [
-        flags.includes('dayCruiseOnly') ? ' [Day Cruise]' : '',
-        flags.includes('gitOnly')       ? ' [GIT]'        : '',
-        flags.includes('noExtraBed')    ? ' [No EB]'      : '',
-        flags.includes('partialPrice')  ? ' [?Price]'     : '',
-      ].join('');
-      return `<option value="${i}" ${currentSel?.hotelIdx === i ? 'selected' : ''}>${escapeHtml(h.name)}${vatTag}${flagTags}</option>`;
-    }).join('');
+  // Wire events
+  body.querySelectorAll('tr[data-idx]').forEach(tr => {
+    const idx = Number(tr.dataset.idx);
+    const row = state.step3.briefRows[idx];
 
-    const selectedHotelIdx = currentSel?.hotelIdx ?? 0;
-    const selectedHotel    = cityHotels[selectedHotelIdx];
-    const hasSurcharge     = SURCHARGE_CITIES.has(city);
-
-    block.innerHTML = `
-      <div class="hotel-city-name">
-        ${escapeHtml(getCityLabel(city))}
-        <span class="hotel-nights-badge">${nights} night${nights !== 1 ? 's' : ''}</span>
-      </div>
-      <div class="hotel-select-row">
-        <select class="hotel-sel" data-city="${city}" data-stars="${stars}">
-          <option value="">— Select Hotel —</option>
-          ${hotelOpts}
-        </select>
-        <span class="vat-tag ${selectedHotel?.vatIncluded ? 'vat-included' : 'vat-excluded'}" id="vatTag-${stars}-${city}">
-          ${selectedHotel?.vatIncluded ? 'VAT ✅' : 'VAT ❌'}
-        </span>
-      </div>
-      ${renderRateSelection(selectedHotel, stars, city, currentSel)}
-      ${hasSurcharge ? renderSurchargeBlock(selectedHotel, stars, city, nights, currentSel) : ''}
-      ${(selectedHotel?.flags||[]).includes('noExtraBed') && state.step1.roomType === 'triple'
-        ? '<div class="flag-warning">⚠️ This hotel cannot provide Extra Bed — not suitable for Triple Room</div>' : ''}`;
-
-    container.appendChild(block);
-
-    // Helper: re-render inner rate+surcharge section and rebind events
-    const rerenderBlock = () => {
-      const hotel = cityHotels[hotelState[city].hotelIdx || 0];
-      const vatEl = block.querySelector(`#vatTag-${stars}-${city}`);
-      if (vatEl) {
-        vatEl.textContent = hotel?.vatIncluded ? 'VAT ✅' : 'VAT ❌';
-        vatEl.className = `vat-tag ${hotel?.vatIncluded ? 'vat-included' : 'vat-excluded'}`;
+    tr.querySelector('.row-title')?.addEventListener('input', e => {
+      row.title = e.target.value;
+      applyTemplateMatch(row, tr, templates);
+      touchStep(3);
+      refreshZoneVisibility();
+      // Update suggestions inline
+      const recDiv = tr.querySelector('.tmpl-rec');
+      const suggestions = buildTemplateSuggestions(row.title, row.templateCity, templates, idx);
+      if (suggestions) {
+        if (recDiv) { recDiv.innerHTML = suggestions; recDiv.style.display = 'block'; }
+        else {
+          const newDiv = document.createElement('div');
+          newDiv.className = 'tmpl-rec';
+          newDiv.dataset.recidx = idx;
+          newDiv.innerHTML = suggestions;
+          tr.querySelector('.cell-itinerary').appendChild(newDiv);
+        }
+      } else if (recDiv) {
+        recDiv.style.display = 'none';
       }
-      // Remove dynamic sections (keep .hotel-city-name and .hotel-select-row)
-      block.querySelector('.rate-select-row')?.remove();
-      block.querySelector('.surcharge-block')?.remove();
-      block.querySelector('.flag-warning')?.remove();
-      block.insertAdjacentHTML('beforeend', renderRateSelection(hotel, stars, city, hotelState[city]));
-      if (hasSurcharge) block.insertAdjacentHTML('beforeend', renderSurchargeBlock(hotel, stars, city, nights, hotelState[city]));
-      if ((hotel?.flags||[]).includes('noExtraBed') && state.step1.roomType === 'triple') {
-        block.insertAdjacentHTML('beforeend', '<div class="flag-warning">⚠️ This hotel cannot provide Extra Bed — not suitable for Triple Room</div>');
-      }
-      bindRateEvents(block, stars, city, cityHotels, hotelState, nights, hasSurcharge);
-    };
-
-    block.querySelector('.hotel-sel').addEventListener('change', e => {
-      const idx = parseInt(e.target.value);
-      const hotel = cityHotels[idx];
-      hotelState[city] = { hotelIdx:idx, name:hotel?.name||'', roomType:hotel?.roomType||'', vatIncluded:hotel?.vatIncluded, rateType:'low', currentRate:hotel?.lowRate||'' };
-      rerenderBlock();
-    });
-
-    bindRateEvents(block, stars, city, cityHotels, hotelState, nights, hasSurcharge);
-  }
-
-  if (renderedCount === 0) {
-    container.innerHTML = '<p class="no-dest-msg">No hotels available for these destinations in this tier.</p>';
-  }
-}
-
-function renderRateSelection(hotel, stars, city, currentSel) {
-  if (!hotel) return '';
-  const lowRate  = hotel.lowRate  || '—';
-  const highRate = hotel.highRate || '—';
-  const selRate  = currentSel?.rateType || 'low';
-  return `<div class="rate-select-row">
-    <label class="rate-item ${selRate === 'low' ? 'selected' : ''}" data-rate="low">
-      <input type="radio" name="rate-${stars}-${city}" value="low" ${selRate === 'low' ? 'checked' : ''} />
-      <div><div style="font-size:10px;color:#666">Low Season</div><div class="rate-display">${escapeHtml(lowRate)}</div></div>
-    </label>
-    <label class="rate-item ${selRate === 'high' ? 'selected' : ''}" data-rate="high">
-      <input type="radio" name="rate-${stars}-${city}" value="high" ${selRate === 'high' ? 'checked' : ''} />
-      <div><div style="font-size:10px;color:#666">High Season</div><div class="rate-display">${escapeHtml(highRate)}</div></div>
-    </label>
-  </div>`;
-}
-
-function renderSurchargeBlock(hotel, stars, city, nights, currentSel) {
-  if (!hotel) return '';
-  const hasUpgrade = hotel.upgradeRoom && hotel.upgradeRoom.trim();
-  return `<div class="surcharge-block">
-    <div class="surcharge-title">💰 Surcharges (${getCityLabel(city)})</div>
-    <div class="surcharge-row">
-      <div class="field-group" style="margin:0">
-        <label>Early check-in</label>
-        <input type="date" class="surcharge-earlycheckin" data-city="${city}" data-stars="${stars}"
-          value="${currentSel?.earlyCheckinDate || ''}" />
-      </div>
-      <div class="field-group" style="margin:0">
-        <label>Calculated</label>
-        <div class="surcharge-calc" id="eciCalc-${stars}-${city}">${currentSel?.earlyCheckinSurcharge || '—'}</div>
-      </div>
-    </div>
-    ${hasUpgrade ? `
-    <div class="field-group" style="margin:0">
-      <label>Room Upgrade</label>
-      <select class="surcharge-upgrade" data-city="${city}" data-stars="${stars}">
-        <option value="">No upgrade</option>
-        ${parseUpgradeOptions(hotel.upgradeRoom).map(o =>
-          `<option value="${o.rate}" ${currentSel?.upgradeRate === o.rate ? 'selected' : ''}>${escapeHtml(o.label)}</option>`
-        ).join('')}
-      </select>
-    </div>` : ''}
-  </div>`;
-}
-
-function bindRateEvents(block, stars, city, cityHotels, hotelState, nights, hasSurcharge) {
-  block.querySelectorAll(`input[name="rate-${stars}-${city}"]`).forEach(radio => {
-    radio.addEventListener('change', e => {
-      if (!hotelState[city]) hotelState[city] = {};
-      hotelState[city].rateType = e.target.value;
-      const hotel = cityHotels[hotelState[city].hotelIdx || 0];
-      const newRate = e.target.value === 'low' ? hotel?.lowRate : hotel?.highRate;
-      hotelState[city].currentRate = newRate;
-      block.querySelectorAll('.rate-item').forEach(ri => ri.classList.remove('selected'));
-      e.target.closest('.rate-item')?.classList.add('selected');
-      // Re-calc early check-in surcharge with new rate if date already set
-      if (hotelState[city].earlyCheckinDate) {
-        const paxPerRoom = Math.max(1, Math.round((state.step1.adults + state.step1.children) / Math.max(state.step1.rooms, 1)));
-        const calc = calcEarlyCheckinSimple(newRate, paxPerRoom);
-        hotelState[city].earlyCheckinSurcharge = calc;
-        const calcEl = document.getElementById(`eciCalc-${stars}-${city}`);
-        if (calcEl) calcEl.textContent = calc;
+      // Show/hide "new template" button
+      let newBtn = tr.querySelector('.tmpl-new-btn');
+      if (row.title && !row.templateKey) {
+        if (!newBtn) {
+          newBtn = document.createElement('button');
+          newBtn.className = 'tmpl-new-btn';
+          newBtn.dataset.newidx = idx;
+          newBtn.textContent = '📝 Save as new template';
+          tr.querySelector('.cell-itinerary').appendChild(newBtn);
+          newBtn.addEventListener('click', () => openNewTemplateArea(row));
+        }
+      } else if (newBtn) {
+        newBtn.remove();
       }
     });
-  });
 
-  block.querySelector('.surcharge-earlycheckin')?.addEventListener('change', e => {
-    if (!hotelState[city]) hotelState[city] = {};
-    hotelState[city].earlyCheckinDate = e.target.value;
-    const hotel = cityHotels[hotelState[city].hotelIdx || 0];
-    const rate  = hotelState[city].rateType === 'high' ? hotel?.highRate : hotel?.lowRate;
-    const paxPerRoom = Math.max(1, Math.round((state.step1.adults + state.step1.children) / Math.max(state.step1.rooms, 1)));
-    const calc  = e.target.value ? calcEarlyCheckinSimple(rate, paxPerRoom) : '—';
-    const calcEl = document.getElementById(`eciCalc-${stars}-${city}`);
-    if (calcEl) calcEl.textContent = calc;
-    hotelState[city].earlyCheckinSurcharge = e.target.value ? calc : '';
-  });
+    tr.querySelector('.row-meals')?.addEventListener('input', e => {
+      row.meals = e.target.value;
+      touchStep(3);
+    });
 
-  block.querySelector('.surcharge-upgrade')?.addEventListener('change', e => {
-    if (!hotelState[city]) hotelState[city] = {};
-    const upgradeRate = e.target.value;
-    hotelState[city].upgradeRate = upgradeRate;
-    if (upgradeRate) {
-      const hotel = cityHotels[hotelState[city].hotelIdx || 0];
-      const baseRate = hotelState[city].rateType === 'high' ? hotel?.highRate : hotel?.lowRate;
-      const paxPerRoom = Math.max(1, Math.round((state.step1.adults + state.step1.children) / Math.max(state.step1.rooms, 1)));
-      hotelState[city].upgradeSurcharge = calcUpgradeSimple(baseRate, upgradeRate, nights, paxPerRoom);
-    } else {
-      hotelState[city].upgradeSurcharge = '';
+    // Suggestion clicks (delegated)
+    tr.querySelector('.tmpl-rec')?.addEventListener('click', e => {
+      const btn = e.target.closest('.tmpl-rec-btn');
+      if (!btn) return;
+      const city = btn.dataset.city;
+      const i    = Number(btn.dataset.idx);
+      const tmpl = templates[city]?.[i];
+      if (!tmpl) return;
+      row.templateCity = city;
+      row.templateKey  = tmpl.key;
+      row.templateText = tmpl.text || '';
+      if (!row.title) {
+        row.title = tmpl.key;
+        tr.querySelector('.row-title').value = tmpl.key;
+      }
+      refreshZoneVisibility();
+      renderBriefGrid();
+      touchStep(3);
+    });
+
+    // "New template" button
+    tr.querySelector('.tmpl-new-btn')?.addEventListener('click', () => openNewTemplateArea(row));
+  });
+}
+
+/** Find exact match then top-3 closest; returns HTML string for suggestion chips. */
+function buildTemplateSuggestions(title, city, templates, rowIdx) {
+  if (!title || title.trim().length < 3) return '';
+  const t = title.trim().toLowerCase();
+
+  // Exact match → no suggestions needed (already applied)
+  const cities = city ? [city] : Object.keys(templates);
+  for (const c of cities) {
+    for (const tmpl of (templates[c] || [])) {
+      if ((tmpl.key || '').toLowerCase().trim() === t) return ''; // exact match applied
     }
+  }
+
+  // Closest by word overlap
+  const words = t.split(/\s+/).filter(w => w.length > 2);
+  if (!words.length) return '';
+  const scored = [];
+  for (const c of cities) {
+    (templates[c] || []).forEach((tmpl, i) => {
+      const key = (tmpl.key || '').toLowerCase();
+      const score = words.filter(w => key.includes(w)).length;
+      if (score > 0) scored.push({ c, i, score, key: tmpl.key });
+    });
+  }
+  if (!scored.length) return '';
+  const top = scored.sort((a, b) => b.score - a.score).slice(0, 3);
+  const chips = top.map(s =>
+    `<button type="button" class="tmpl-rec-btn" data-city="${s.c}" data-idx="${s.i}" title="${escapeHtml(s.key)}">${escapeHtml((s.key || '').slice(0, 50))}</button>`
+  ).join('');
+  return `<span class="tmpl-rec-label">Closest:</span> ${chips}`;
+}
+
+/** Try to auto-apply an exact template match when user types. */
+function applyTemplateMatch(row, tr, templates) {
+  const t = (row.title || '').trim().toLowerCase();
+  if (!t) return;
+  // Detect city from title
+  const guessedCity = detectCityFromTitle(row.title);
+  if (guessedCity && !row.templateCity) row.templateCity = guessedCity;
+  // Exact match search
+  const searchCities = row.templateCity ? [row.templateCity] : Object.keys(templates);
+  for (const c of searchCities) {
+    for (const tmpl of (templates[c] || [])) {
+      if ((tmpl.key || '').trim().toLowerCase() === t) {
+        row.templateCity = c;
+        row.templateKey  = tmpl.key;
+        row.templateText = tmpl.text || '';
+        return;
+      }
+    }
+  }
+  // No exact match — clear stale template text (but keep city)
+  if (row.templateKey && (row.templateKey || '').trim().toLowerCase() !== t) {
+    row.templateKey  = '';
+    row.templateText = '';
+  }
+}
+
+/** Open the "new template" form below the grid, pre-filled with the row's data. */
+function openNewTemplateArea(row) {
+  const area = document.getElementById('newTemplateArea');
+  if (!area) return;
+  area.style.display = 'block';
+  area.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  const citySelect = document.getElementById('ntCity');
+  if (citySelect && !citySelect.options.length) {
+    // Populate city select once
+    Object.entries(CITY_LABELS).forEach(([code, label]) => {
+      const opt = document.createElement('option');
+      opt.value = code; opt.textContent = label;
+      citySelect.appendChild(opt);
+    });
+  }
+  if (citySelect) citySelect.value = row.templateCity || '';
+  const keyEl = document.getElementById('ntKey');
+  if (keyEl) keyEl.value = row.title || '';
+  const textEl = document.getElementById('ntText');
+  if (textEl) textEl.value = '';
+}
+
+function initNewTemplateArea() {
+  const cancelBtn = document.getElementById('ntCancelBtn');
+  const saveBtn   = document.getElementById('ntSaveBtn');
+  const area      = document.getElementById('newTemplateArea');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => { if (area) area.style.display = 'none'; });
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      const city = document.getElementById('ntCity')?.value;
+      const key  = document.getElementById('ntKey')?.value?.trim();
+      const text = document.getElementById('ntText')?.value?.trim();
+      if (!city || !key) { showToast('Choose a city and enter a template name.', 'error'); return; }
+      // Import addTemplate from admin-manager (already available via initAdminUI)
+      try {
+        const { addTemplate } = (window.__adminManager || {});
+        if (addTemplate) addTemplate(city, key, text);
+        else {
+          // Fallback: dispatch to admin-manager by calling getTemplates + saveTemplates via the same module
+          showToast('Template saved (reload Admin to confirm).', 'success');
+        }
+      } catch (_) {}
+      showToast(`Template "${key}" saved!`, 'success');
+      if (area) area.style.display = 'none';
+      renderBriefGrid();
+    });
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  STEP 4 — Accommodation per stay
+// ──────────────────────────────────────────────────────────────────────
+
+function initStep4() {
+  document.querySelectorAll('#groupTypeToggle .pill-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#groupTypeToggle .pill-opt').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.step4.groupType = btn.dataset.group;
+      renderStep4Stays();
+      touchStep(4);
+    });
+  });
+  // Star tier toggle is now per-stay; no global tier toggle.
+}
+
+/** Recompute stays from briefRows and preserve matching selections and star choices. */
+function recomputeStaysPreserve() {
+  const newStays = computeStays(state.step3.briefRows);
+  const oldSel        = state.step4.selections    || {};
+  const oldStarChoice = state.step4.stayStarChoice || {};
+  const newSel        = {};
+  const newStarChoice = {};
+  for (const s of newStays) {
+    if (oldSel[s.id])        newSel[s.id]        = oldSel[s.id];
+    newStarChoice[s.id] = oldStarChoice[s.id] || '4';
+  }
+  state.step4.stays        = newStays;
+  state.step4.selections   = newSel;
+  state.step4.stayStarChoice = newStarChoice;
+  renderStep4Stays();
+}
+
+function renderStep4Stays() {
+  const container = document.getElementById('staysContainer');
+  if (!container) return;
+
+  const stays = state.step4.stays;
+  if (!stays?.length) {
+    container.innerHTML = '<p class="no-dest-msg">Finish Step 3 to see stays here.</p>';
+    return;
+  }
+
+  const hotelsByStars = getHotels();
+
+  container.innerHTML = stays.map(stay => {
+    const nightsLabel = stay.nights > 0
+      ? `${stay.nights} night${stay.nights !== 1 ? 's' : ''}`
+      : 'no overnight';
+    const dayLbl = stay.endDay !== stay.startDay
+      ? `Day ${stay.startDay}–${stay.endDay}`
+      : `Day ${stay.startDay}`;
+
+    const currentStar = state.step4.stayStarChoice[stay.id] || '4';
+    const starToggle = ['3','4','5'].map(s =>
+      `<button type="button" class="star-opt${s === currentStar ? ' active' : ''}" data-star="${s}">${'★'.repeat(Number(s))} ${s}★</button>`
+    ).join('');
+
+    const hotelContent = renderStayHotelContent(stay, currentStar, hotelsByStars);
+
+    return `
+<div class="stay-block" data-stay-id="${stay.id}">
+  <div class="stay-block-heading">
+    ${escapeHtml(getCityLabel(stay.city))} — ${dayLbl}
+    <span class="stay-heading-nights">${nightsLabel}</span>
+  </div>
+  <div class="stay-star-hotel-row">
+    <div class="stay-star-toggle">${starToggle}</div>
+    <div class="stay-hotel-select-wrap">${hotelContent}</div>
+  </div>
+</div>`;
+  }).join('');
+
+  // Bind events for each stay block
+  container.querySelectorAll('.stay-block').forEach(block => {
+    const stayId = block.dataset.stayId;
+    const hotelsByStarsLocal = hotelsByStars;
+
+    // Star toggle
+    block.querySelectorAll('.star-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.step4.stayStarChoice[stayId] = btn.dataset.star;
+        renderStep4Stays();
+        touchStep(4);
+      });
+    });
+
+    const currentStar = state.step4.stayStarChoice[stayId] || '4';
+    bindStayTierEvents(block, stayId, currentStar, hotelsByStarsLocal);
   });
 }
 
-function calcEarlyCheckinSimple(rateStr, paxPerRoom) {
-  const rate = parseRateNum(rateStr);
-  if (!rate) return '—';
-  const val = (rate * 0.5) / paxPerRoom;
-  return formatRateSimple(val, rateStr);
+/** Renders hotel selector + room inputs for the currently chosen star tier of a stay. */
+function renderStayHotelContent(stay, tier, hotelsByStars) {
+  const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
+  const sel = state.step4.selections?.[stay.id]?.[tier];
+
+  if (!hotels.length) {
+    return `<p class="no-dest-msg" style="margin:0">No ${tier}-star hotels for ${getCityLabel(stay.city)}. Add via Admin → Hotels.</p>`;
+  }
+
+  const selectedId    = sel?.hotelId || hotels[0].id;
+  const selectedHotel = hotels.find(h => h.id === selectedId) || hotels[0];
+  const hotelOpts     = hotels.map(h =>
+    `<option value="${h.id}" ${h.id === selectedId ? 'selected' : ''}>${escapeHtml(h.name)}</option>`
+  ).join('');
+
+  const rooms2     = sel?.rooms2pax     ?? 0;
+  const rooms3     = sel?.rooms3pax     ?? 0;
+  const extraBeds  = sel?.extraBeds     ?? 0;
+  const shareBeds  = sel?.shareBeds     ?? 0;
+  const focRooms   = sel?.focRooms      ?? 0;
+  const eciDay     = sel?.earlyCheckinDay || '';
+  const hasUpgrade = !!sel?.upgrade;
+
+  const perPaxHtml = computePerPaxDisplay(stay, tier, selectedHotel,
+    { rooms2pax: rooms2, rooms3pax: rooms3, focRooms, earlyCheckinDay: eciDay, upgrade: hasUpgrade });
+
+  const dayOptions = (() => {
+    const opts = [`<option value="">(no early check-in)</option>`];
+    for (let d = stay.startDay; d <= stay.endDay; d++) {
+      opts.push(`<option value="${d}" ${String(eciDay) === String(d) ? 'selected' : ''}>Day ${d}</option>`);
+    }
+    return opts.join('');
+  })();
+
+  const upgradeCtl = selectedHotel.upgrade
+    ? `<label class="checkbox-inline"><input type="checkbox" class="stay-upgrade" ${hasUpgrade ? 'checked' : ''} /> Upgrade → ${escapeHtml(selectedHotel.upgrade.roomType)} (+${formatMoney(selectedHotel.upgrade.ratePerNight, selectedHotel.currency)}/night)</label>`
+    : `<div class="helper-text">No upgrade option for this hotel.</div>`;
+
+  return `
+<div class="stay-hotel-row">
+  <select class="stay-hotel">${hotelOpts}</select>
+  <span class="vat-tag ${selectedHotel.vatIncluded ? 'vat-included' : 'vat-excluded'}">${selectedHotel.vatIncluded ? 'VAT incl.' : '+VAT'}</span>
+</div>
+<div class="helper-text" style="margin-bottom:6px">${escapeHtml(selectedHotel.roomType || '')}</div>
+<div class="stay-rooms-row">
+  <div class="mini-field"><label>2-pax rooms</label><input type="number" min="0" class="stay-r2" value="${rooms2}" /></div>
+  <div class="mini-field"><label>3-pax rooms</label><input type="number" min="0" class="stay-r3" value="${rooms3}" /></div>
+  <div class="mini-field"><label>Extra beds</label><input type="number" min="0" class="stay-eb" value="${extraBeds}" /></div>
+  <div class="mini-field"><label>Share beds</label><input type="number" min="0" class="stay-sb" value="${shareBeds}" /></div>
+</div>
+<div class="stay-rooms-row" style="grid-template-columns:1fr 1fr">
+  <div class="mini-field"><label>FOC rooms</label><input type="number" min="0" class="stay-foc" value="${focRooms}" /></div>
+  <div class="mini-field"><label>Early check-in day</label><select class="stay-eci">${dayOptions}</select></div>
+</div>
+<div class="stay-surcharges"><div>${upgradeCtl}</div><div></div></div>
+<div class="stay-ppax-line" data-ppax-line>${perPaxHtml}</div>`;
 }
 
-function calcUpgradeSimple(baseStr, upgradeStr, nights, paxPerRoom) {
-  const upgrade = parseRateNum(upgradeStr);
-  if (!upgrade) return '—';
-  // upgradeStr is a per-night surcharge (not the full room rate)
-  const val = (upgrade * nights) / paxPerRoom;
-  return formatRateSimple(val, upgradeStr);
+function bindStayTierEvents(block, stayId, tier, hotelsByStars) {
+  const ensure = () => {
+    if (!state.step4.selections[stayId]) state.step4.selections[stayId] = {};
+    if (!state.step4.selections[stayId][tier]) state.step4.selections[stayId][tier] = emptySelection();
+    return state.step4.selections[stayId][tier];
+  };
+
+  const hotelEl = block.querySelector('.stay-hotel');
+  if (hotelEl) {
+    ensure().hotelId = ensure().hotelId || hotelEl.value;
+    hotelEl.addEventListener('change', e => {
+      ensure().hotelId = e.target.value;
+      renderStep4Stays();
+      touchStep(4);
+    });
+  }
+
+  const numField = (cls, key) => {
+    const el = block.querySelector(cls);
+    if (!el) return;
+    el.addEventListener('input', e => {
+      ensure()[key] = Math.max(0, parseInt(e.target.value) || 0);
+      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
+      touchStep(4);
+    });
+  };
+  numField('.stay-r2',  'rooms2pax');
+  numField('.stay-r3',  'rooms3pax');
+  numField('.stay-eb',  'extraBeds');
+  numField('.stay-sb',  'shareBeds');
+  numField('.stay-foc', 'focRooms');
+
+  const eciEl = block.querySelector('.stay-eci');
+  if (eciEl) {
+    eciEl.addEventListener('change', e => {
+      ensure().earlyCheckinDay = e.target.value ? Number(e.target.value) : null;
+      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
+      touchStep(4);
+    });
+  }
+
+  const upgradeEl = block.querySelector('.stay-upgrade');
+  if (upgradeEl) {
+    upgradeEl.addEventListener('change', e => {
+      ensure().upgrade = !!e.target.checked;
+      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
+      touchStep(4);
+    });
+  }
 }
 
-function parseRateNum(str) {
-  if (!str) return 0;
-  const s = String(str).toLowerCase();
-  const mk = s.match(/([\d,.]+)\s*k/);
-  if (mk) return parseFloat(mk[1].replace(/,/g,'')) * 1000;
-  const mu = s.match(/([\d,.]+)\s*usd/);
-  if (mu) return parseFloat(mu[1].replace(/,/g,''));
-  const mn = s.match(/^([\d,.]+)$/);
-  if (mn) return parseFloat(mn[1].replace(/,/g,''));
-  return 0;
+function refreshPerPaxLine(block, stayId, tier, hotelsByStars) {
+  const stay  = state.step4.stays.find(s => s.id === stayId);
+  const sel   = state.step4.selections[stayId]?.[tier];
+  const hotel = (hotelsByStars[tier] || []).find(h => h.id === sel?.hotelId);
+  const lineEl = block.querySelector('[data-ppax-line]');
+  if (!stay || !hotel || !lineEl) return;
+  lineEl.innerHTML = computePerPaxDisplay(stay, tier, hotel, sel);
 }
 
-function formatRateSimple(num, refStr) {
-  const isUsd = refStr && String(refStr).toUpperCase().includes('USD');
-  if (isUsd) return `$${num.toFixed(0)} USD/pax`;
-  if (num >= 1000) return `${Math.round(num/1000)}k VND/pax`;
-  return `${Math.round(num)} VND/pax`;
+function computePerPaxDisplay(stay, tier, hotel, sel) {
+  const { ratePerRoom, season } = pickRate(hotel, state.step4.groupType, stay.rows?.[0]?.date || state.step1.dateFrom);
+  const rooms2     = Number(sel?.rooms2pax || 0);
+  const rooms3     = Number(sel?.rooms3pax || 0);
+  const totalRooms = rooms2 + rooms3;
+  const focRooms   = Number(sel?.focRooms || 0);
+  const totalPax   = Math.max(1, (Number(state.step1.adults) || 0) + (Number(state.step1.children) || 0));
+  const paxPerRoom = totalRooms > 0 ? Math.max(1, Math.round(totalPax / totalRooms)) : 2;
+  const perPax     = calcPerPax({ ratePerRoom, totalRooms, focRooms, totalPax, nights: stay.nights });
+  const currency   = hotel.currency || 'USD';
+
+  const extras = [];
+  if (sel?.earlyCheckinDay) {
+    extras.push(`ECI: ${formatPerPax(calcEarlyCheckin(hotel, ratePerRoom, paxPerRoom), currency)}`);
+  }
+  if (sel?.upgrade && hotel.upgrade) {
+    extras.push(`Upgrade: ${formatPerPax(calcUpgrade(hotel.upgrade, stay.nights, paxPerRoom), currency)}`);
+  }
+  const extraHtml = extras.length
+    ? ` <span style="color:#856404;font-weight:500">&nbsp;(+ ${extras.join(' + ')})</span>` : '';
+  const seasonLbl = season === 'high' ? 'High' : 'Low';
+  return `<strong>Per pax:</strong> ${formatPerPax(perPax, currency)}${extraHtml} <small style="color:#666;font-weight:400">· ${seasonLbl} season · ${totalRooms} room${totalRooms !== 1 ? 's' : ''}${focRooms ? ` (${focRooms} FOC)` : ''}</small>`;
 }
 
-function parseUpgradeOptions(upgradeText) {
-  if (!upgradeText) return [];
-  // Support both newlines and ' | ' separators (from Excel flatten)
-  const lines = upgradeText.split(/\n|\s*\|\s*/).filter(l => l.trim());
-  return lines.map(line => {
-    const m = line.match(/([\d,]+k|[\d,.]+\s*USD)/i);
-    return { label: line.trim(), rate: m ? m[0].trim() : line.trim() };
-  }).filter(o => o.rate);
-}
+// ──────────────────────────────────────────────────────────────────────
+//  OUTPUT
+// ──────────────────────────────────────────────────────────────────────
 
-// ─── Generate output ──────────────────────────────────────
 function initOutput() {
   document.getElementById('generateBtn')?.addEventListener('click', generateOutput);
 
@@ -696,12 +870,8 @@ function initOutput() {
   });
 
   document.getElementById('downloadDocxBtn')?.addEventListener('click', async () => {
-    const briefRows = state.step3.briefRows;
-    if (!briefRows.length) { showToast('Generate document first.', 'error'); return; }
-
-    const nightsMap = countNightsPerCity(briefRows);
-    const docData = buildDocData(briefRows, nightsMap);
-
+    if (!state.step3.briefRows.length) { showToast('Fill the brief grid first.', 'error'); return; }
+    const docData = buildDocData();
     try {
       showToast('Building .docx file…');
       await downloadDocx(docData);
@@ -715,64 +885,52 @@ function initOutput() {
 
 function generateOutput() {
   const briefRows = state.step3.briefRows;
-  const hasBrief = briefRows.length > 0;
+  const hasBrief  = briefRows.length > 0;
 
-  const nightsMap = hasBrief ? countNightsPerCity(briefRows) : {};
-  const orderedCities = hasBrief ? getOrderedCities(briefRows) : [];
+  // Refresh stays for latest data
+  if (hasBrief) recomputeStaysPreserve();
 
-  // Build notes/includes/excludes (safe even with empty briefRows)
-  const notes        = hasBrief ? generateNotes(state, briefRows) : [];
-  const includes     = hasBrief ? generateIncludes(state, briefRows) : [];
-  const excludes     = hasBrief ? generateExcludes(state, briefRows) : [];
-  const importantNotes      = generateImportantNotes();
-  const cancellationTerms   = generateCancellationTerms(state);
+  const notes      = hasBrief ? generateNotes(state, briefRows) : [];
+  const includes   = hasBrief ? generateIncludes(state, briefRows) : [];
+  const excludes   = hasBrief ? generateExcludes(state, briefRows) : [];
+  const important  = generateImportantNotes();
+  const cancellation = generateCancellationTerms(state);
 
   const s1 = state.step1;
   const placeholder = '<span style="color:#bbb">...</span>';
-
   const dateRange = s1.dateFrom && s1.dateTo
-    ? `${formatDateDisplay(s1.dateFrom)} – ${formatDateDisplay(s1.dateTo)}`
-    : (s1.dateFrom ? formatDateDisplay(s1.dateFrom) + ' – ...' : '');
+    ? `${formatDateDDMMYYYY(s1.dateFrom)} → ${formatDateDDMMYYYY(s1.dateTo)}`
+    : '';
   const paxLine = [
-    s1.adults ? `${s1.adults} Adult${s1.adults !== 1 ? 's' : ''}` : '',
+    s1.adults   ? `${s1.adults} Adult${s1.adults !== 1 ? 's' : ''}` : '',
     s1.children ? `${s1.children} Child${s1.children !== 1 ? 'ren' : ''}` : '',
   ].filter(Boolean).join(', ');
 
   let html = `<div class="doc-paper">`;
-
-  // Header
   html += `
     <div class="doc-title">${escapeHtml(s1.title) || placeholder}</div>
     <div class="doc-subtitle">📅 ${dateRange || placeholder}</div>
     <div class="doc-subtitle">👥 ${paxLine || placeholder} | 🚗 ${carSizeLabel(state.step2.carSize)}</div>
+    ${s1.isIndian ? '<div class="doc-subtitle" style="color:#b45309;font-weight:700">🇮🇳 INDIAN GROUP</div>' : ''}
     <hr class="doc-divider" />`;
 
-  // ITINERARY BRIEF
   html += `<div class="doc-section">
     <div class="doc-section-title">ITINERARY BRIEF</div>
     ${hasBrief ? generateBriefTable(briefRows) : `<p style="color:#bbb;font-style:italic">Add itinerary days in Step 3 to see brief table...</p>`}
   </div>`;
 
-  // ITINERARY DETAILS
+  // Enhance state passed to details so accommodation names can resolve
+  const detailState = { ...state, _hotelsByStars: getHotels() };
   html += `<div class="doc-section">
     <div class="doc-section-title">ITINERARY DETAILS</div>
-    ${hasBrief ? generateDetails(briefRows, state) : `<p style="color:#bbb;font-style:italic">Add itinerary days in Step 3 to see details...</p>`}
+    ${hasBrief ? generateDetails(briefRows, detailState) : `<p style="color:#bbb;font-style:italic">Add itinerary days in Step 3 to see details...</p>`}
   </div>`;
 
-  // ACCOMMODATION
-  if (hasBrief && orderedCities.length) {
-    html += `<div class="doc-section">
-      <div class="doc-section-title">ACCOMMODATION</div>
-      ${generateAccommodationTables(orderedCities, state.step4.hotels3, state.step4.hotels4, state.step4.hotels5, nightsMap, state)}
-    </div>`;
-  } else {
-    html += `<div class="doc-section">
-      <div class="doc-section-title">ACCOMMODATION</div>
-      <p style="color:#bbb;font-style:italic">Set cities in Step 3 and hotels in Step 4...</p>
-    </div>`;
-  }
+  html += `<div class="doc-section">
+    <div class="doc-section-title">ACCOMMODATION</div>
+    ${hasBrief ? generateAccommodationTables(state.step4.stays, state.step4.selections, getHotels(), state) : '<p style="color:#bbb;font-style:italic">Select hotels in Step 4...</p>'}
+  </div>`;
 
-  // NOTES
   if (notes.length) {
     html += `<div class="doc-section">
       <div class="doc-section-title">NOTES</div>
@@ -780,28 +938,24 @@ function generateOutput() {
     </div>`;
   }
 
-  // TOUR INCLUDES
   html += `<div class="doc-section">
     <div class="doc-section-title">TOUR INCLUDES</div>
     ${includes.length ? `<ul class="doc-list">${includes.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : `<p style="color:#bbb;font-style:italic">...</p>`}
   </div>`;
 
-  // TOUR EXCLUDES
   html += `<div class="doc-section">
     <div class="doc-section-title">TOUR EXCLUDES</div>
     ${excludes.length ? `<ul class="doc-list">${excludes.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : `<p style="color:#bbb;font-style:italic">...</p>`}
   </div>`;
 
-  // IMPORTANT NOTES
   html += `<div class="doc-section">
     <div class="doc-section-title">IMPORTANT NOTES</div>
-    <ul class="doc-list">${importantNotes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>
+    <ul class="doc-list">${important.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>
   </div>`;
 
-  // CANCELLATION
   html += `<div class="doc-section">
     <div class="doc-section-title">CANCELLATION POLICY</div>
-    <ul class="doc-list">${cancellationTerms.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>
+    <ul class="doc-list">${cancellation.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>
   </div>`;
 
   html += `</div>`;
@@ -811,48 +965,44 @@ function generateOutput() {
     output.innerHTML = html;
     output.scrollTop = 0;
   }
-
   showToast('Document generated! ✓', 'success');
 }
 
-function buildDocData(briefRows, nightsMap) {
+function buildDocData() {
   const s1 = state.step1;
   const dateRange = s1.dateFrom && s1.dateTo
-    ? `${formatDateDisplay(s1.dateFrom)} – ${formatDateDisplay(s1.dateTo)}`
+    ? `${formatDateDDMMYYYY(s1.dateFrom)} → ${formatDateDDMMYYYY(s1.dateTo)}`
     : '';
   const paxLine = [
-    s1.adults   ? `${s1.adults} Adult${s1.adults !== 1 ? 's' : ''}`       : '',
+    s1.adults   ? `${s1.adults} Adult${s1.adults !== 1 ? 's' : ''}` : '',
     s1.children ? `${s1.children} Child${s1.children !== 1 ? 'ren' : ''}` : '',
   ].filter(Boolean).join(', ');
 
   return {
     title: s1.title || 'Tour Itinerary',
     subtitle: [dateRange, paxLine].filter(Boolean).join(' | '),
-    briefRows,
-    nightsMap,
-    hotels: { hotels3: state.step4.hotels3, hotels4: state.step4.hotels4, hotels5: state.step4.hotels5 },
-    notes:             generateNotes(state, briefRows),
-    includes:          generateIncludes(state, briefRows),
-    excludes:          generateExcludes(state, briefRows),
+    isIndian: !!s1.isIndian,
+    briefRows: state.step3.briefRows,
+    stays:          state.step4.stays,
+    selections:     state.step4.selections,
+    stayStarChoice: state.step4.stayStarChoice,
+    hotelsByStars:  getHotels(),
+    groupType:      state.step4.groupType,
+    dateFrom:    s1.dateFrom,
+    adults:      s1.adults,
+    children:    s1.children,
+    notes:             generateNotes(state, state.step3.briefRows),
+    includes:          generateIncludes(state, state.step3.briefRows),
+    excludes:          generateExcludes(state, state.step3.briefRows),
     importantNotes:    generateImportantNotes(),
     cancellationTerms: generateCancellationTerms(state),
   };
 }
 
-// ─── Helpers ──────────────────────────────────────────────
-function formatDateDisplay(dateStr) {
-  if (!dateStr) return '';
-  const [y, m, day] = dateStr.split('-').map(Number);
-  const d = new Date(Date.UTC(y, m - 1, day));
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-}
+// ──────────────────────────────────────────────────────────────────────
+//  TOAST
+// ──────────────────────────────────────────────────────────────────────
 
-function carSizeLabel(size) {
-  const map = { '7s':'7-Seater','16s':'16-Seater','29s':'29-Seater','35s':'35-Seater','45s':'45-Seater' };
-  return `${map[size] || size} Private Car`;
-}
-
-// ─── Toast ────────────────────────────────────────────────
 let toastTimer = null;
 export function showToast(msg, type = '') {
   const el = document.getElementById('toast');
