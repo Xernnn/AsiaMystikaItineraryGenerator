@@ -538,12 +538,21 @@
           <div class="field-group">
             <label>Early check-in day</label>
             <select id="smEci"></select>
-            <div class="helper-text">Adds 50% of room rate × paid rooms (or hotel override).</div>
+          </div>
+          <div class="field-group">
+            <label># rooms with ECI</label>
+            <input type="number" id="smEciRooms" min="0" />
+            <div class="helper-text">Blank = all paid rooms.</div>
+          </div>
+          <div class="field-group">
+            <label># rooms upgrading</label>
+            <input type="number" id="smUpgradeRooms" min="0" />
+            <div class="helper-text">Blank = all paid rooms.</div>
           </div>
           <div class="field-group" id="smFlexBlock" style="display:none">
             <label>Flexible price override (per room / night)</label>
             <input type="number" id="smPriceOverride" min="0" step="0.01" />
-            <div class="helper-text">Used only for this booking. Leave blank for the contract rate.</div>
+            <div class="helper-text">Used only for this booking.</div>
           </div>
         </div>
       </section>

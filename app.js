@@ -12,19 +12,19 @@
 
 import {
   formatMeals, parseMeals, detectCityFromTitle, dayLabel,
-  formatDateDDMMYYYY, parseDDMMYYYY, addDaysISO, countDays, mealWords,
+  formatDateDDMMYYYY, parseDDMMYYYY, addDaysISO, countDays,
 } from './lib/brief-parser.js';
 import { generateBriefTable, generateDetails, escapeHtml } from './lib/detail-engine.js';
 import {
   computeStays, generateAccommodationTables, getCityLabel,
-  suggestFocCount, formatMoney, formatPerPax,
-  findRoomType, buildStayBreakdown,
+  formatMoney, formatPerPax, findRoomType, buildStayBreakdown,
 } from './lib/accommodation-engine.js';
 import {
   generateNotes, generateIncludes, generateExcludes,
   generateImportantNotes, generateCancellationTerms,
 } from './lib/notes-engine.js';
 import { downloadDocx } from './lib/docx-generator.js';
+import { createStayModalController } from './lib/stay-modal.js';
 import { initAdminUI, getTemplates, getHotels, addTemplate as adminAddTemplate } from './admin/admin-manager.js';
 import { CITY_LABELS } from './data/templates.js';
 
@@ -65,6 +65,16 @@ const state = {
   },
 };
 
+function seedDefaultRoomCounts(draft) {
+  const adults   = Number(state.step1.adults   || 0);
+  const children = Number(state.step1.children || 0);
+  const totalPax = Math.max(1, adults + children);
+  if (!(draft.rooms2pax > 0) && !(draft.rooms3pax > 0)) {
+    draft.rooms2pax = Math.ceil(totalPax / 2);
+  }
+  return draft;
+}
+
 function emptySelection(hotel = null) {
   return {
     hotelId:         hotel?.id || '',
@@ -75,7 +85,9 @@ function emptySelection(hotel = null) {
     shareBeds:       0,
     focRooms:        0,
     earlyCheckinDay: null,
+    eciRooms:            null,
     upgradeRoomTypeId:   null,
+    upgradeRooms:        null,
     priceOverride:       null,
     upgradePriceOverride: null,
   };
@@ -86,6 +98,8 @@ function emptySelection(hotel = null) {
 // ──────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  const restored = restoreWizardState();
+
   initTabs();
   initStep1();
   initStep2();
@@ -95,9 +109,60 @@ document.addEventListener('DOMContentLoaded', () => {
   initOutput();
   initAdminUI(showToast);
   initNewTemplateArea();
+
+  if (restored) {
+    applyRestoredStateToDOM();
+    rebuildBriefGridForDates();
+    recomputeStaysPreserve();
+    renderStep4Stays();
+    renderDestinationBars();
+    updateWizardUI();
+  }
+
   suggestCarSize();
   refreshZoneVisibility();
+  renderPersistedBanner();
 });
+
+function renderPersistedBanner() {
+  const host = document.getElementById('step1');
+  if (!host) return;
+  const raw = localStorage.getItem(LS_WIZARD);
+  if (!raw) return;
+  if (document.getElementById('persistedBanner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'persistedBanner';
+  bar.className = 'restore-banner';
+  bar.innerHTML = `
+    <span>💾 Previous draft restored.</span>
+    <button type="button" class="btn-ghost" id="persistedClearBtn">Start fresh</button>
+  `;
+  host.insertBefore(bar, host.firstChild);
+  document.getElementById('persistedClearBtn')?.addEventListener('click', () => {
+    clearPersistedWizardState();
+    location.reload();
+  });
+}
+
+function applyRestoredStateToDOM() {
+  const v = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  v('tourTitle',     state.step1.title);
+  v('dateFrom',      state.step1.dateFrom ? formatDateDDMMYYYY(state.step1.dateFrom) : '');
+  v('dateTo',        state.step1.dateTo   ? formatDateDDMMYYYY(state.step1.dateTo)   : '');
+  v('adults',        state.step1.adults);
+  v('children',      state.step1.children);
+  v('mealPlan',      state.step1.mealPlan);
+  const ind = document.getElementById('isIndian');
+  if (ind) ind.checked = !!state.step1.isIndian;
+  v('carSize',       state.step2.carSize);
+  v('shuttleHalong', state.step2.shuttleHalong);
+  v('limoSapa',      state.step2.limoSapa);
+  v('sapaN29', state.step2.sapaZone?.n29 ?? 0);
+  v('sapaN16', state.step2.sapaZone?.n16 ?? 0);
+  v('pqN29',   state.step2.pqZone?.n29   ?? 0);
+  v('pqN16',   state.step2.pqZone?.n16   ?? 0);
+  v('groupType', state.step4.groupType);
+}
 
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -137,6 +202,7 @@ function confirmStep(n) {
   if (!validateStep(n)) return;
   state.wizard.confirmed[n] = true;
   state.wizard.dirty[n] = false;
+  persistWizardState();
 
   if (n === 1) {
     rebuildBriefGridForDates();
@@ -319,7 +385,61 @@ function handleStep1Change(id, el) {
   touchStep(1);
 }
 
-function touchStep(n) { markStepDirty(n); }
+function touchStep(n) {
+  markStepDirty(n);
+  persistWizardState();
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  WIZARD STATE PERSISTENCE
+// ──────────────────────────────────────────────────────────────────────
+
+const LS_WIZARD = 'am_wizard_state_v1';
+
+function persistWizardState() {
+  try {
+    const snapshot = {
+      step1: state.step1,
+      step2: state.step2,
+      step3: state.step3,
+      step4: {
+        groupType:      state.step4.groupType,
+        stayStarChoice: state.step4.stayStarChoice,
+        selections:     state.step4.selections,
+        // stays is recomputed from step1/step3 on load, do not persist it.
+      },
+      wizard: state.wizard,
+    };
+    localStorage.setItem(LS_WIZARD, JSON.stringify(snapshot));
+  } catch { /* quota or SSR — silent */ }
+}
+
+function restoreWizardState() {
+  try {
+    const raw = localStorage.getItem(LS_WIZARD);
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== 'object') return false;
+    Object.assign(state.step1, saved.step1 || {});
+    Object.assign(state.step2, saved.step2 || {});
+    if (saved.step3?.briefRows) state.step3.briefRows = saved.step3.briefRows;
+    if (saved.step4) {
+      state.step4.groupType      = saved.step4.groupType      ?? state.step4.groupType;
+      state.step4.stayStarChoice = saved.step4.stayStarChoice ?? {};
+      state.step4.selections     = saved.step4.selections     ?? {};
+    }
+    if (saved.wizard) {
+      Object.assign(state.wizard.confirmed, saved.wizard.confirmed || {});
+      Object.assign(state.wizard.dirty,     saved.wizard.dirty     || {});
+      state.wizard.currentStep = saved.wizard.currentStep || 1;
+    }
+    return true;
+  } catch { return false; }
+}
+
+function clearPersistedWizardState() {
+  try { localStorage.removeItem(LS_WIZARD); } catch {}
+}
 
 // ──────────────────────────────────────────────────────────────────────
 //  STEP 2 — Transport & zone fleets
@@ -738,56 +858,41 @@ function buildTemplateSuggestions(title, city, activeKey, templates) {
   const label = `<span class="tmpl-rec-label">Suggestions:</span>`;
   const t = (title || '').trim().toLowerCase();
 
+  // Quiet by default — only surface chips once the user has typed ≥3 chars
+  // OR already picked a template for this row. An empty row with a city set
+  // used to spam ~8 chips per day; that was too noisy.
+  if (t.length < 3 && !activeKey) return '';
+
   const allCities = Object.keys(templates);
   const searchCities = city ? [city, ...allCities.filter(c => c !== city)] : allCities;
 
-  // Empty title → browse chips (first 8 templates in the active city, if any).
-  if (!t) {
-    if (!city) return '';
-    const list = (templates[city] || []).slice(0, 8);
-    if (!list.length) return '';
-    const chips = list.map((tmpl, i) =>
-      chipFor(city, i, tmpl.key, activeKey)
-    ).join('');
-    return `${label}${chips}`;
+  // If we have an active template but no typed text, just pin that chip.
+  if (t.length < 3 && activeKey) {
+    for (const c of searchCities) {
+      const arr = templates[c] || [];
+      const i = arr.findIndex(tmpl => tmpl.key === activeKey);
+      if (i >= 0) return `${label}${chipFor(c, i, activeKey, activeKey)}`;
+    }
+    return '';
   }
 
-  // Short title (1-2 chars) → still show chips from the active city if we know it.
-  if (t.length < 3) {
-    if (!city) return '';
-    const list = (templates[city] || []).slice(0, 8);
-    if (!list.length) return '';
-    const chips = list.map((tmpl, i) =>
-      chipFor(city, i, tmpl.key, activeKey)
-    ).join('');
-    return `${label}${chips}`;
-  }
-
-  // Score templates by shared keywords AND exact match (so exact match pins first).
+  // Score templates by shared keywords + exact match (exact match pins first).
   const words = t.split(/\s+/).filter(w => w.length > 2);
   const scored = [];
   for (const c of searchCities) {
     (templates[c] || []).forEach((tmpl, i) => {
       const key = (tmpl.key || '').toLowerCase();
       let score = words.filter(w => key.includes(w)).length;
-      if (key === t) score += 100;  // lock exact match on top.
+      if (key === t) score += 100;
       if (score > 0) scored.push({ c, i, score, key: tmpl.key });
     });
   }
 
-  if (!scored.length) {
-    // Still offer the active-city catalogue so users can eyeball alternatives.
-    if (!city) return '';
-    const list = (templates[city] || []).slice(0, 8);
-    if (!list.length) return '';
-    const chips = list.map((tmpl, i) =>
-      chipFor(city, i, tmpl.key, activeKey)
-    ).join('');
-    return `${label}${chips}`;
-  }
+  if (!scored.length) return '';
 
   scored.sort((a, b) => b.score - a.score);
-  const chips = scored.map(s => chipFor(s.c, s.i, s.key, activeKey)).join('');
+  const top = scored.slice(0, 8);
+  const chips = top.map(s => chipFor(s.c, s.i, s.key, activeKey)).join('');
   return `${label}${chips}`;
 }
 
@@ -947,25 +1052,18 @@ function renderStaySummaryCard(stay, hotelsByStars) {
     `<button type="button" class="star-opt${s === tier ? ' active' : ''}" data-star="${s}">${s}★</button>`
   ).join('');
 
-  // Resolve the current selection (seed if missing).
+  // RESOLVE selection for DISPLAY only — never mutate state during render.
   const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
-  if (!state.step4.selections[stay.id]) state.step4.selections[stay.id] = {};
-  let sel = state.step4.selections[stay.id][tier];
-  if (hotels.length && (!sel || !hotels.find(h => h.id === sel.hotelId))) {
-    sel = emptySelection(hotels[0]);
-    state.step4.selections[stay.id][tier] = sel;
-  }
+  const savedSel = state.step4.selections[stay.id]?.[tier] || null;
+  const sel = savedSel && hotels.find(h => h.id === savedSel.hotelId) ? savedSel : null;
 
   let body = '';
   if (!hotels.length) {
     body = `<div class="stay-summary-empty">⚠ No ${tier}★ hotels for ${escapeHtml(getCityLabel(stay.city))}. Add via Admin → Hotels.</div>`;
   } else if (!sel || !sel.hotelId) {
-    body = `<div class="stay-summary-empty">No hotel selected yet.</div>`;
+    body = `<div class="stay-summary-empty">No hotel selected yet — click <strong>Edit</strong> to pick one.</div>`;
   } else {
     const hotel = hotels.find(h => h.id === sel.hotelId) || hotels[0];
-    if (!(hotel.roomTypes || []).find(rt => rt.id === sel.roomTypeId)) {
-      sel.roomTypeId = hotel.roomTypes?.[0]?.id || '';
-    }
     const rt = findRoomType(hotel, sel.roomTypeId);
     const bd = buildStayBreakdown({
       stay, sel, hotel, state,
@@ -1075,330 +1173,24 @@ function renderGrandTotal(stays, hotelsByStars) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-//  STEP 4 — Stay edit modal (controller)
+//  STEP 4 — Stay edit modal (delegated to lib/stay-modal.js)
 // ──────────────────────────────────────────────────────────────────────
 
-const stayEdit = {
-  stayId: null,
-  tier: null,
-  draft: null,   // working copy of the selection — committed on Save
-};
+const stayModal = createStayModalController({
+  state,
+  getHotels,
+  emptySelection,
+  seedDefaultRoomCounts,
+  showToast,
+  touchStep,
+  renderStep4Stays: () => renderStep4Stays(),
+});
+function initStayEditModal()  { stayModal.init(); }
+function openStayEditModal(id){ stayModal.open(id); }
+function closeStayEditModal() { stayModal.close(); }
 
-function initStayEditModal() {
-  const modal = document.getElementById('stayEditModal');
-  if (!modal) return;
-
-  modal.querySelectorAll('[data-close="stayEditModal"]').forEach(btn => {
-    btn.addEventListener('click', closeStayEditModal);
-  });
-
-  document.getElementById('smHotel')?.addEventListener('change', e => {
-    stayEdit.draft.hotelId = e.target.value;
-    stayEdit.draft.roomTypeId = '';
-    stayEdit.draft.upgradeRoomTypeId = null;
-    stayEdit.draft.priceOverride = null;
-    refreshStayEditModal({ repopulateLists: true });
-  });
-
-  document.querySelectorAll('#smStarToggle .pill-opt').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tier = btn.dataset.star;
-      if (!tier || tier === stayEdit.tier) return;
-      document.querySelectorAll('#smStarToggle .pill-opt').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      stayEdit.tier = tier;
-      state.step4.stayStarChoice[stayEdit.stayId] = tier;
-      // Try to inherit existing selection for that tier; otherwise fresh.
-      const existing = state.step4.selections[stayEdit.stayId]?.[tier];
-      if (existing) {
-        stayEdit.draft = { ...existing };
-      } else {
-        const hotelsByStars = getHotels();
-        const hotels = (hotelsByStars[tier] || []).filter(h => h.city === currentStay()?.city && !(h.flags || []).includes('skip'));
-        stayEdit.draft = emptySelection(hotels[0] || null);
-      }
-      refreshStayEditModal({ repopulateLists: true });
-    });
-  });
-
-  document.getElementById('smRoomType')?.addEventListener('change', e => {
-    stayEdit.draft.roomTypeId = e.target.value;
-    stayEdit.draft.upgradeRoomTypeId = null;
-    stayEdit.draft.priceOverride = null;
-    refreshStayEditModal({ repopulateLists: true });
-  });
-
-  document.getElementById('smUpgradeRt')?.addEventListener('change', e => {
-    stayEdit.draft.upgradeRoomTypeId = e.target.value || null;
-    refreshStayEditModal();
-  });
-
-  const numBind = (id, key) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('input', e => {
-      stayEdit.draft[key] = Math.max(0, parseInt(e.target.value) || 0);
-      refreshStayEditModal();
-    });
-  };
-  numBind('smR2',  'rooms2pax');
-  numBind('smR3',  'rooms3pax');
-  numBind('smEb',  'extraBeds');
-  numBind('smSb',  'shareBeds');
-  numBind('smFoc', 'focRooms');
-
-  document.getElementById('smEci')?.addEventListener('change', e => {
-    stayEdit.draft.earlyCheckinDay = e.target.value ? Number(e.target.value) : null;
-    refreshStayEditModal();
-  });
-
-  document.getElementById('smPriceOverride')?.addEventListener('input', e => {
-    const v = e.target.value.trim();
-    stayEdit.draft.priceOverride = v === '' ? null : Number(v);
-    refreshStayEditModal();
-  });
-
-  document.getElementById('smSuggestFocBtn')?.addEventListener('click', () => {
-    const hotel = currentHotel();
-    if (!hotel) return;
-    const totalRooms = (Number(stayEdit.draft.rooms2pax) || 0) + (Number(stayEdit.draft.rooms3pax) || 0);
-    const suggestion = suggestFocCount(hotel, totalRooms);
-    stayEdit.draft.focRooms = suggestion;
-    const focEl = document.getElementById('smFoc');
-    if (focEl) focEl.value = String(suggestion);
-    refreshStayEditModal();
-    const rule = hotel.focRule;
-    const helper = document.getElementById('smFocHelper');
-    if (helper) {
-      helper.textContent = rule?.everyRooms
-        ? `Rule: every ${rule.everyRooms} rooms → ${rule.freeRooms} FOC. Booked ${totalRooms} rooms → ${suggestion} FOC.`
-        : 'No FOC rule on this hotel.';
-    }
-  });
-
-  document.getElementById('smSaveBtn')?.addEventListener('click', () => {
-    // Commit the draft into state.
-    if (!state.step4.selections[stayEdit.stayId]) state.step4.selections[stayEdit.stayId] = {};
-    state.step4.selections[stayEdit.stayId][stayEdit.tier] = { ...stayEdit.draft };
-    closeStayEditModal();
-    renderStep4Stays();
-    touchStep(4);
-    showToast('Stay updated.', 'success');
-  });
-}
-
-function currentStay() {
-  return state.step4.stays.find(s => s.id === stayEdit.stayId) || null;
-}
-function currentHotel() {
-  const stay = currentStay();
-  if (!stay) return null;
-  const hotelsByStars = getHotels();
-  const list = (hotelsByStars[stayEdit.tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
-  return list.find(h => h.id === stayEdit.draft.hotelId) || null;
-}
-
-function openStayEditModal(stayId) {
-  const stay = state.step4.stays.find(s => s.id === stayId);
-  if (!stay) return;
-  const tier = state.step4.stayStarChoice[stayId] || '4';
-  const sel = state.step4.selections[stayId]?.[tier] || emptySelection();
-  stayEdit.stayId = stayId;
-  stayEdit.tier   = tier;
-  stayEdit.draft  = { ...sel };
-
-  document.querySelectorAll('#smStarToggle .pill-opt').forEach(b => {
-    b.classList.toggle('active', b.dataset.star === tier);
-  });
-
-  document.getElementById('stayModalTitle').textContent =
-    `${getCityLabel(stay.city)} — Day ${stay.startDay}${stay.endDay !== stay.startDay ? '–' + stay.endDay : ''} (${stay.nights} night${stay.nights !== 1 ? 's' : ''})`;
-
-  refreshStayEditModal({ repopulateLists: true });
-
-  const modal = document.getElementById('stayEditModal');
-  if (modal) modal.style.display = 'flex';
-}
-
-function closeStayEditModal() {
-  const modal = document.getElementById('stayEditModal');
-  if (modal) modal.style.display = 'none';
-  stayEdit.stayId = null;
-  stayEdit.tier = null;
-  stayEdit.draft = null;
-}
-
-/**
- * Repaint the stay-edit modal from `stayEdit.draft`.
- * - repopulateLists: rebuild the hotel + room-type + upgrade + ECI lists.
- * - Otherwise only the price breakdown + helper-text zones update.
- */
-function refreshStayEditModal({ repopulateLists = false } = {}) {
-  if (!stayEdit.stayId || !stayEdit.draft) return;
-  const stay = currentStay();
-  if (!stay) return;
-
-  const tier = stayEdit.tier;
-  const hotelsByStars = getHotels();
-  const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
-
-  if (!hotels.length) {
-    // Nothing to choose — grey everything out
-    const breakdown = document.getElementById('smBreakdown');
-    if (breakdown) breakdown.innerHTML = `<div class="helper-text">No ${tier}★ hotels available for ${escapeHtml(getCityLabel(stay.city))}. Add via Admin → Hotels.</div>`;
-    if (repopulateLists) {
-      const hEl = document.getElementById('smHotel'); if (hEl) hEl.innerHTML = '<option value="">—</option>';
-      const rEl = document.getElementById('smRoomType'); if (rEl) rEl.innerHTML = '';
-      const uEl = document.getElementById('smUpgradeRt'); if (uEl) uEl.innerHTML = '';
-    }
-    return;
-  }
-
-  // Default a hotel if we haven't picked one yet.
-  if (!stayEdit.draft.hotelId || !hotels.find(h => h.id === stayEdit.draft.hotelId)) {
-    stayEdit.draft.hotelId = hotels[0].id;
-    stayEdit.draft.roomTypeId = hotels[0].roomTypes?.[0]?.id || '';
-  }
-  const hotel = hotels.find(h => h.id === stayEdit.draft.hotelId);
-  if (!(hotel.roomTypes || []).find(rt => rt.id === stayEdit.draft.roomTypeId)) {
-    stayEdit.draft.roomTypeId = hotel.roomTypes?.[0]?.id || '';
-  }
-  const rt = findRoomType(hotel, stayEdit.draft.roomTypeId);
-
-  if (repopulateLists) {
-    // Hotel dropdown
-    const hEl = document.getElementById('smHotel');
-    if (hEl) {
-      hEl.innerHTML = hotels.map(h => {
-        const red = (h.flags || []).includes('redFlag') ? ' 🚩' : '';
-        return `<option value="${h.id}" ${h.id === stayEdit.draft.hotelId ? 'selected' : ''}>${escapeHtml(h.name)}${red}</option>`;
-      }).join('');
-    }
-    // Room type dropdown
-    const rEl = document.getElementById('smRoomType');
-    if (rEl) {
-      rEl.innerHTML = (hotel.roomTypes || []).map(rtOpt => {
-        const red = (rtOpt.flags || []).includes('redFlag') ? ' 🚩' : '';
-        const flex = rtOpt.flexiblePrice ? ' 💲' : '';
-        return `<option value="${rtOpt.id}" ${rtOpt.id === stayEdit.draft.roomTypeId ? 'selected' : ''}>${escapeHtml(rtOpt.name)}${red}${flex}</option>`;
-      }).join('');
-    }
-    // Upgrade dropdown
-    const uEl = document.getElementById('smUpgradeRt');
-    if (uEl) {
-      uEl.innerHTML = [
-        `<option value="">(no upgrade)</option>`,
-        ...(hotel.roomTypes || [])
-          .filter(rtOpt => rtOpt.id !== stayEdit.draft.roomTypeId)
-          .map(rtOpt => `<option value="${rtOpt.id}" ${rtOpt.id === stayEdit.draft.upgradeRoomTypeId ? 'selected' : ''}>Upgrade → ${escapeHtml(rtOpt.name)}</option>`),
-      ].join('');
-    }
-    // ECI day dropdown
-    const eciEl = document.getElementById('smEci');
-    if (eciEl) {
-      const curr = stayEdit.draft.earlyCheckinDay || '';
-      const opts = [`<option value="">(no early check-in)</option>`];
-      for (let d = stay.startDay; d <= stay.endDay; d++) {
-        opts.push(`<option value="${d}" ${String(curr) === String(d) ? 'selected' : ''}>Day ${d}</option>`);
-      }
-      eciEl.innerHTML = opts.join('');
-    }
-    // Numeric inputs
-    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? 0; };
-    setVal('smR2',  stayEdit.draft.rooms2pax ?? 0);
-    setVal('smR3',  stayEdit.draft.rooms3pax ?? 0);
-    setVal('smEb',  stayEdit.draft.extraBeds ?? 0);
-    setVal('smSb',  stayEdit.draft.shareBeds ?? 0);
-    setVal('smFoc', stayEdit.draft.focRooms  ?? 0);
-    const poEl = document.getElementById('smPriceOverride');
-    if (poEl) poEl.value = stayEdit.draft.priceOverride ?? '';
-  }
-
-  // Flags around the hotel select + extra-bed warn + flex block visibility
-  const hotelFlagsEl = document.getElementById('smHotelFlags');
-  if (hotelFlagsEl) {
-    const chips = [];
-    if ((hotel.flags || []).includes('redFlag'))  chips.push(`<span class="flag-badge flag-redFlag">🚩 Red flag</span>`);
-    if ((hotel.flags || []).includes('gitOnly'))  chips.push(`<span class="flag-badge">GIT only</span>`);
-    if ((hotel.flags || []).includes('dayCruiseOnly')) chips.push(`<span class="flag-badge">Day cruise only</span>`);
-    hotelFlagsEl.innerHTML = chips.join(' ');
-  }
-  const rtFlagsEl = document.getElementById('smRoomTypeFlags');
-  if (rtFlagsEl) {
-    const chips = [];
-    if ((rt?.flags || []).includes('redFlag')) chips.push(`<span class="flag-badge flag-redFlag">🚩 Red flag</span>`);
-    if (rt?.flexiblePrice)                     chips.push(`<span class="flag-badge flag-flex">Flexible price</span>`);
-    if (rt?.extraBedAllowed === false)         chips.push(`<span class="flag-badge">No extra bed</span>`);
-    rtFlagsEl.innerHTML = chips.join(' ');
-  }
-  const ebWarnEl = document.getElementById('smEbWarn');
-  if (ebWarnEl) ebWarnEl.style.display = (rt?.extraBedAllowed === false) ? 'block' : 'none';
-  const ebEl = document.getElementById('smEb');
-  if (ebEl) {
-    ebEl.disabled = (rt?.extraBedAllowed === false);
-    if (rt?.extraBedAllowed === false) {
-      ebEl.value = '0';
-      stayEdit.draft.extraBeds = 0;
-    }
-  }
-  const flexBlock = document.getElementById('smFlexBlock');
-  if (flexBlock) flexBlock.style.display = rt?.flexiblePrice ? 'block' : 'none';
-
-  // FOC helper — show rule summary
-  const helper = document.getElementById('smFocHelper');
-  if (helper) {
-    const rule = hotel.focRule;
-    helper.textContent = rule?.everyRooms
-      ? `Rule: every ${rule.everyRooms} rooms → ${rule.freeRooms} FOC.`
-      : 'No FOC rule configured on this hotel.';
-  }
-
-  // Breakdown
-  const bd = buildStayBreakdown({
-    stay,
-    sel: stayEdit.draft,
-    hotel,
-    state,
-    groupType: state.step4.groupType,
-    dateFrom: state.step1.dateFrom,
-  });
-  const breakdownEl = document.getElementById('smBreakdown');
-  if (breakdownEl) breakdownEl.innerHTML = renderBreakdownTable(bd);
-}
-
-function renderBreakdownTable(bd) {
-  if (!bd || !bd.rows?.length) return `<div class="helper-text">No data yet.</div>`;
-  const currency = bd.currency;
-  const lineRows = bd.rows
-    .filter(r => r.kind !== 'total' && r.kind !== 'perPax')
-    .map(r => {
-      const signedAmt = r.amount < 0
-        ? `<span style="color:#c0392b">− ${formatMoney(Math.abs(r.amount), currency)}</span>`
-        : `${formatMoney(r.amount, currency)}`;
-      const rowClass =
-        r.kind === 'subtotal' ? 'breakdown-row subtotal' :
-        (r.kind === 'foc' ? 'breakdown-row discount' : 'breakdown-row');
-      return `<tr class="${rowClass}">
-  <td>${escapeHtml(r.label)}</td>
-  <td class="bd-detail">${escapeHtml(r.detail)}</td>
-  <td class="bd-amt">${signedAmt}</td>
-</tr>`;
-    }).join('');
-
-  return `<table class="breakdown-table">
-    <tbody>
-      ${lineRows}
-      <tr class="breakdown-row total">
-        <td colspan="2" style="text-align:right">Grand total</td>
-        <td class="bd-amt">${formatMoney(bd.grandTotal, currency)}</td>
-      </tr>
-      <tr class="breakdown-row per-pax">
-        <td colspan="2" style="text-align:right">÷ ${bd.totalPax} pax</td>
-        <td class="bd-amt">${formatPerPax(bd.perPax, currency)}</td>
-      </tr>
-    </tbody>
-  </table>`;
-}
+// The legacy inline implementations that previously lived here have moved
+// to lib/stay-modal.js (see createStayModalController). Removed for clarity.
 
 // ──────────────────────────────────────────────────────────────────────
 //  OUTPUT

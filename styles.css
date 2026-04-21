@@ -1564,3 +1564,28 @@ input[data-date-text].invalid {
   font-weight: 600;
   margin-bottom: 12px;
 }
+
+.restore-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #eef7ff;
+  color: #1f4b78;
+  border: 1px solid #bcd9f5;
+  border-left: 4px solid #3a8fd8;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.restore-banner .btn-ghost {
+  background: transparent;
+  border: 1px solid #3a8fd8;
+  color: #1f4b78;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.restore-banner .btn-ghost:hover { background: rgba(58,143,216,0.1); }
