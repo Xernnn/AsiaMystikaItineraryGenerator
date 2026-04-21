@@ -2,30 +2,30 @@
  * app.js — Main controller for the Asia Mystika Itinerary Generator.
  *
  * High-level responsibilities:
- *  - Step 1: General info (dates with DD/MM/YYYY preview, pax, Indian toggle).
- *  - Step 2: Transport (primary car, Sapa + Phu Quoc Rach Vem zone pickers).
- *  - Step 3: Excel-like brief grid driven by dateFrom/dateTo with per-day guide.
- *  - Step 4: Accommodation per stay (FIT/GIT × 3+4/4+5 star tier), room counts,
- *           extra/share beds, FOC rooms, early check-in + upgrade surcharges.
- *  - Progressive wizard UX (lock / active / confirmed / dirty per step card).
- *  - Generate preview + download .docx.
+ *  - Step 1: General info (DD/MM/YYYY text dates, pax, Indian toggle).
+ *  - Step 2: Transport primary car + Sapa / Phu Quoc zone fleets (N×29 + M×16).
+ *  - Step 3: Excel-like brief grid with template auto-match + closest suggestions.
+ *  - Step 4: Accommodation per stay — room-type aware, flexible price override,
+ *           FOC rooms, early check-in + upgrade (pick target room type).
+ *  - Progressive wizard UX and document generation.
  */
 
 import {
   formatMeals, parseMeals, detectCityFromTitle, dayLabel,
-  formatDateDDMMYYYY, addDaysISO, countDays, mealWords,
+  formatDateDDMMYYYY, parseDDMMYYYY, addDaysISO, countDays, mealWords,
 } from './lib/brief-parser.js';
 import { generateBriefTable, generateDetails, escapeHtml } from './lib/detail-engine.js';
 import {
-  computeStays, pickRate, generateAccommodationTables, getCityLabel,
-  suggestFocCount, formatMoney, formatPerPax, calcPerPax, calcEarlyCheckin, calcUpgrade,
+  computeStays, generateAccommodationTables, getCityLabel,
+  suggestFocCount, formatMoney, formatPerPax,
+  findRoomType, buildStayBreakdown,
 } from './lib/accommodation-engine.js';
 import {
   generateNotes, generateIncludes, generateExcludes,
   generateImportantNotes, generateCancellationTerms,
 } from './lib/notes-engine.js';
 import { downloadDocx } from './lib/docx-generator.js';
-import { initAdminUI, getTemplates, getHotels } from './admin/admin-manager.js';
+import { initAdminUI, getTemplates, getHotels, addTemplate as adminAddTemplate } from './admin/admin-manager.js';
 import { CITY_LABELS } from './data/templates.js';
 
 // ──────────────────────────────────────────────────────────────────────
@@ -41,13 +41,13 @@ const state = {
   },
   step2: {
     carSize: '7s',
-    sapaZoneCar: '29s',   // only used when Sapa zone detected
-    pqRachVemCar: '29s',  // only used when Phu Quoc Rach Vem detected
+    sapaZone: { n29: 0, n16: 0 },
+    pqZone:   { n29: 0, n16: 0 },
     shuttleHalong: 'no',
     limoSapa: 'no',
   },
   step3: {
-    // briefRows: { dayNum, dateLabel, date, title, meals:{B,L,D,BR},
+    // briefRows: { dayNum, dateLabel, date, title, meals (string),
     //              templateCity, templateKey, templateText,
     //              hasGuide, guideLanguage, notes }
     briefRows: [],
@@ -55,8 +55,8 @@ const state = {
   step4: {
     groupType: 'fit',       // 'fit' | 'git'
     stayStarChoice: {},     // { [stayId]: '3'|'4'|'5' }
-    stays: [],              // from computeStays()
-    selections: {},         // { [stayId]: { "3"|"4"|"5": selection } }
+    stays: [],
+    selections: {},         // { [stayId]: { [tier]: selection } }
   },
   wizard: {
     currentStep: 1,
@@ -65,17 +65,19 @@ const state = {
   },
 };
 
-// Default per-stay-tier selection.
 function emptySelection(hotel = null) {
   return {
     hotelId:         hotel?.id || '',
+    roomTypeId:      hotel?.roomTypes?.[0]?.id || '',
     rooms2pax:       0,
     rooms3pax:       0,
     extraBeds:       0,
     shareBeds:       0,
     focRooms:        0,
     earlyCheckinDay: null,
-    upgrade:         false,
+    upgradeRoomTypeId:   null,
+    priceOverride:       null,
+    upgradePriceOverride: null,
   };
 }
 
@@ -97,7 +99,6 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshZoneVisibility();
 });
 
-// Tabs (Generator / Admin)
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -137,7 +138,6 @@ function confirmStep(n) {
   state.wizard.confirmed[n] = true;
   state.wizard.dirty[n] = false;
 
-  // Cascade downstream
   if (n === 1) {
     rebuildBriefGridForDates();
     recomputeStaysPreserve();
@@ -145,17 +145,14 @@ function confirmStep(n) {
     recomputeStaysPreserve();
   }
 
-  // Unlock next if not yet
   if (n < 4 && state.wizard.currentStep <= n) {
     state.wizard.currentStep = n + 1;
   }
-  // Mark any downstream confirmed steps as dirty (need re-confirm)
   for (let i = n + 1; i <= 4; i++) {
     if (state.wizard.confirmed[i]) state.wizard.dirty[i] = true;
   }
   updateWizardUI();
 
-  // Scroll to next step
   if (n < 4) {
     const next = document.getElementById(`step${n + 1}`);
     next?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -166,7 +163,6 @@ function confirmStep(n) {
 function markStepDirty(n) {
   if (state.wizard.confirmed[n]) {
     state.wizard.dirty[n] = true;
-    // Mark all downstream confirmed steps as stale too.
     for (let i = n + 1; i <= 4; i++) {
       if (state.wizard.confirmed[i]) state.wizard.dirty[i] = true;
     }
@@ -177,8 +173,8 @@ function markStepDirty(n) {
 function validateStep(n) {
   if (n === 1) {
     if (!state.step1.title.trim())    { showToast('Enter a tour title first.', 'error'); return false; }
-    if (!state.step1.dateFrom)        { showToast('Set the From date first.', 'error'); return false; }
-    if (!state.step1.dateTo)          { showToast('Set the To date first.', 'error'); return false; }
+    if (!state.step1.dateFrom)        { showToast('Set the From date first (DD/MM/YYYY).', 'error'); return false; }
+    if (!state.step1.dateTo)          { showToast('Set the To date first (DD/MM/YYYY).', 'error'); return false; }
     if (countDays(state.step1.dateFrom, state.step1.dateTo) < 1) {
       showToast('To date must be on or after From date.', 'error'); return false;
     }
@@ -209,7 +205,6 @@ function updateWizardUI() {
       card.classList.add('active');
     }
 
-    // Toggle button states
     const confirmBtn = card.querySelector('.btn-confirm');
     const editBtn    = card.querySelector('.btn-edit-step');
     if (isConfirmed && !isDirty) {
@@ -219,6 +214,33 @@ function updateWizardUI() {
       if (confirmBtn) confirmBtn.style.display = '';
       if (editBtn)    editBtn.style.display = 'none';
     }
+
+    // "Upstream dirty" banner — if any earlier step is dirty while this step
+    // is already confirmed, warn the user that totals may be stale.
+    renderUpstreamStaleBanner(card, n);
+  }
+}
+
+function renderUpstreamStaleBanner(card, n) {
+  const existing = card.querySelector('.step-stale-banner');
+  let staleSrc = 0;
+  for (let i = 1; i < n; i++) {
+    if (state.wizard.dirty[i]) { staleSrc = i; break; }
+  }
+  const shouldShow = state.wizard.confirmed[n] && staleSrc > 0;
+  if (shouldShow) {
+    const msg = `⚠ Step ${staleSrc} was edited. Re-confirm it so Step ${n} stays in sync.`;
+    if (existing) {
+      existing.textContent = msg;
+    } else {
+      const el = document.createElement('div');
+      el.className = 'step-stale-banner';
+      el.textContent = msg;
+      const body = card.querySelector('.step-body');
+      if (body) body.insertBefore(el, body.firstChild);
+    }
+  } else if (existing) {
+    existing.remove();
   }
 }
 
@@ -227,14 +249,17 @@ function updateWizardUI() {
 // ──────────────────────────────────────────────────────────────────────
 
 function initStep1() {
-  const fields = ['tourTitle','dateFrom','dateTo','adults','children','mealPlan'];
-  fields.forEach(id => {
+  const titleEl = document.getElementById('tourTitle');
+  if (titleEl) titleEl.addEventListener('input', e => { state.step1.title = e.target.value; touchStep(1); });
+
+  bindDateField('dateFrom');
+  bindDateField('dateTo');
+
+  ['adults','children','mealPlan'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.addEventListener('input', () => {
-      handleStep1Change(id, el);
-    });
     el.addEventListener('change', () => handleStep1Change(id, el));
+    el.addEventListener('input',  () => handleStep1Change(id, el));
   });
 
   document.getElementById('childAges')?.addEventListener('input', e => {
@@ -247,8 +272,35 @@ function initStep1() {
     state.step1.isIndian = e.target.checked;
     touchStep(1);
   });
+}
 
-  updateDatePreviews();
+function bindDateField(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input',  () => autoFormatDDMMYYYY(el));
+  el.addEventListener('change', () => commitDateField(id, el));
+  el.addEventListener('blur',   () => commitDateField(id, el));
+}
+
+/** Insert / keep slashes while typing (1102 → 11/02, 110226 → 11/02/26 etc.). */
+function autoFormatDDMMYYYY(el) {
+  const raw = el.value.replace(/[^0-9]/g, '').slice(0, 8);
+  let out = raw;
+  if (raw.length > 4) out = raw.slice(0, 2) + '/' + raw.slice(2, 4) + '/' + raw.slice(4);
+  else if (raw.length > 2) out = raw.slice(0, 2) + '/' + raw.slice(2);
+  el.value = out;
+}
+
+function commitDateField(id, el) {
+  const iso = parseDDMMYYYY(el.value);
+  if (!iso && el.value.trim() !== '') {
+    showToast('Date must be DD/MM/YYYY.', 'error');
+    el.value = state.step1[id] ? formatDateDDMMYYYY(state.step1[id]) : '';
+    return;
+  }
+  state.step1[id] = iso;
+  rebuildBriefGridForDates();
+  touchStep(1);
 }
 
 function handleStep1Change(id, el) {
@@ -264,30 +316,17 @@ function handleStep1Change(id, el) {
     suggestCarSize();
   }
   if (id === 'adults') suggestCarSize();
-  if (id === 'dateFrom' || id === 'dateTo') {
-    updateDatePreviews();
-    rebuildBriefGridForDates();
-  }
   touchStep(1);
 }
 
-function updateDatePreviews() {
-  const from = document.getElementById('dateFromPreview');
-  const to   = document.getElementById('dateToPreview');
-  if (from) from.textContent = state.step1.dateFrom ? formatDateDDMMYYYY(state.step1.dateFrom) : '—';
-  if (to)   to.textContent   = state.step1.dateTo   ? formatDateDDMMYYYY(state.step1.dateTo)   : '—';
-}
-
-function touchStep(n) {
-  markStepDirty(n);
-}
+function touchStep(n) { markStepDirty(n); }
 
 // ──────────────────────────────────────────────────────────────────────
-//  STEP 2 — car zones
+//  STEP 2 — Transport & zone fleets
 // ──────────────────────────────────────────────────────────────────────
 
 function initStep2() {
-  ['carSize','shuttleHalong','limoSapa','sapaZoneCar','pqRachVemCar'].forEach(id => {
+  ['carSize','shuttleHalong','limoSapa'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', () => {
@@ -295,14 +334,61 @@ function initStep2() {
       touchStep(2);
     });
   });
+
+  bindZoneFleet('sapa', 'sapaN29', 'sapaN16', 'sapaZoneCapacity', 'sapaZoneSuggestBtn');
+  bindZoneFleet('pq',   'pqN29',   'pqN16',   'pqZoneCapacity',   'pqZoneSuggestBtn');
 }
 
-/** pax-for-transport ignores children ≤ 5 years old. */
+function bindZoneFleet(key, n29Id, n16Id, capId, suggestId) {
+  const stateKey = key === 'sapa' ? 'sapaZone' : 'pqZone';
+  const n29El = document.getElementById(n29Id);
+  const n16El = document.getElementById(n16Id);
+  const capEl = document.getElementById(capId);
+  const sugBtn = document.getElementById(suggestId);
+
+  const update = () => {
+    const n29 = Math.max(0, parseInt(n29El?.value) || 0);
+    const n16 = Math.max(0, parseInt(n16El?.value) || 0);
+    state.step2[stateKey] = { n29, n16 };
+    const cap = n29 * 29 + n16 * 16;
+    const pax = paxForTransport();
+    if (capEl) {
+      const ok = cap >= pax;
+      capEl.innerHTML = `Capacity: <strong>${cap}</strong> seats (pax: ${pax}) ${ok ? '<span style="color:#0a7d2a">✓</span>' : '<span style="color:#c0392b">⚠ insufficient</span>'}`;
+    }
+    touchStep(2);
+  };
+  n29El?.addEventListener('input', update);
+  n16El?.addEventListener('input', update);
+
+  sugBtn?.addEventListener('click', () => {
+    const pax = paxForTransport();
+    const combo = suggestZoneFleet(pax);
+    if (n29El) n29El.value = combo.n29;
+    if (n16El) n16El.value = combo.n16;
+    update();
+  });
+
+  update();
+}
+
+/** Greedy: prefer 29-seaters; fill leftovers with 16-seater(s). */
+function suggestZoneFleet(pax) {
+  if (!pax || pax <= 0) return { n29: 0, n16: 0 };
+  if (pax <= 16) return { n29: 0, n16: 1 };
+  if (pax <= 29) return { n29: 1, n16: 0 };
+  const n29 = Math.floor(pax / 29);
+  const rem = pax - n29 * 29;
+  if (rem === 0) return { n29, n16: 0 };
+  if (rem <= 16) return { n29, n16: 1 };
+  return { n29: n29 + 1, n16: 0 };
+}
+
+/** Pax-for-transport ignores children ≤ 5 years old. */
 function paxForTransport() {
   const adults = Number(state.step1.adults) || 0;
   const kids   = Number(state.step1.children) || 0;
   const ages   = state.step1.childrenAges || [];
-  // If ages listed, use them; otherwise assume all children count.
   const countedKids = ages.length
     ? ages.filter(a => a > 5).length
     : kids;
@@ -321,31 +407,128 @@ function suggestCarSize() {
   const suggest = document.getElementById('carSuggest');
   if (suggest) suggest.textContent = `Suggested: ${carSizeLabel(size)} (${total} pax)`;
 
-  // Only auto-set primary when user hasn't confirmed step 2 yet
   if (!state.wizard.confirmed[2]) {
     const sel = document.getElementById('carSize');
     if (sel) { sel.value = size; state.step2.carSize = size; }
   }
 
-  // Suggest Sapa / Phu Quoc zone: 16 / 29 / split
-  const zoneSuggest = total > 29 ? 'split' : (total > 16 ? '29s' : '16s');
-  if (!state.wizard.confirmed[2]) {
-    const sapaEl = document.getElementById('sapaZoneCar');
-    const pqEl   = document.getElementById('pqRachVemCar');
-    if (sapaEl) { sapaEl.value = zoneSuggest; state.step2.sapaZoneCar   = zoneSuggest; }
-    if (pqEl)   { pqEl.value   = zoneSuggest; state.step2.pqRachVemCar = zoneSuggest; }
+  // Pre-fill zone fleets with a suggestion if they're all zero.
+  const pref = suggestZoneFleet(total);
+  for (const [stateKey, n29Id, n16Id] of [['sapaZone', 'sapaN29', 'sapaN16'], ['pqZone', 'pqN29', 'pqN16']]) {
+    const cur = state.step2[stateKey];
+    if (cur.n29 === 0 && cur.n16 === 0 && !state.wizard.confirmed[2]) {
+      state.step2[stateKey] = pref;
+      const n29 = document.getElementById(n29Id); if (n29) n29.value = pref.n29;
+      const n16 = document.getElementById(n16Id); if (n16) n16.value = pref.n16;
+    }
+  }
+  // Refresh capacity displays
+  refreshZoneCapacities();
+}
+
+function refreshZoneCapacities() {
+  for (const [stateKey, capId] of [['sapaZone', 'sapaZoneCapacity'], ['pqZone', 'pqZoneCapacity']]) {
+    const z = state.step2[stateKey];
+    const cap = (z.n29 || 0) * 29 + (z.n16 || 0) * 16;
+    const pax = paxForTransport();
+    const el = document.getElementById(capId);
+    if (el) {
+      const ok = pax > 0 ? cap >= pax : cap > 0;
+      el.classList.toggle('ok', ok && (cap > 0));
+      el.classList.toggle('short', pax > 0 && cap < pax);
+      el.innerHTML = `Capacity: <strong>${cap}</strong> seats (pax: ${pax}) ${ok ? '✓' : '⚠ insufficient'}`;
+    }
   }
 }
 
+/**
+ * Compute the set of destinations the tour actually visits, based on every
+ * row's template city (fallback: regex-detected city from the typed title).
+ * Returns an ordered array of unique city codes in the order they appear.
+ */
+function detectTourDestinations() {
+  const seen = new Set();
+  const out = [];
+  for (const r of (state.step3.briefRows || [])) {
+    let c = r.templateCity;
+    if (!c && r.title) c = detectCityFromTitle(r.title) || '';
+    if (c && !seen.has(c)) { seen.add(c); out.push(c); }
+  }
+  return out;
+}
+
+/** Does any Phu Quoc row go to Rach Vem? Drives the PQ zone-fleet UI. */
+function tourHitsPqRachVem() {
+  return (state.step3.briefRows || []).some(r =>
+    r.templateCity === 'PQ' && /rach vem|rạch vẹm/i.test(r.title || '')
+  );
+}
+
 function refreshZoneVisibility() {
-  const briefRows = state.step3.briefRows;
-  const hasSapa = briefRows.some(r => r.templateCity === 'SP' || /sapa|sa pa/i.test(r.title || ''));
-  const hasPqRachVem = briefRows.some(r => r.templateCity === 'PQ' && /rach vem|rạch vẹm/i.test(r.title || ''));
+  const dest = detectTourDestinations();
+  const hasSapa     = dest.includes('SP');
+  const hasPq       = dest.includes('PQ');
+  const hasHalong   = dest.includes('HL');
 
   const sapaGroup = document.getElementById('sapaZoneGroup');
   const pqGroup   = document.getElementById('pqRachVemGroup');
   if (sapaGroup) sapaGroup.style.display = hasSapa ? 'block' : 'none';
-  if (pqGroup)   pqGroup.style.display   = hasPqRachVem ? 'block' : 'none';
+  if (pqGroup)   pqGroup.style.display   = (hasPq && tourHitsPqRachVem()) ? 'block' : 'none';
+
+  // Destination-specific transport options
+  const optShuttle = document.getElementById('optShuttleHalong');
+  const optLimo    = document.getElementById('optLimoSapa');
+  const optEmpty   = document.getElementById('optEmptyHint');
+  if (optShuttle) optShuttle.style.display = hasHalong ? '' : 'none';
+  if (optLimo)    optLimo.style.display    = hasSapa   ? '' : 'none';
+
+  // Auto-reset a toggle that is no longer relevant to avoid surprise values.
+  if (!hasHalong && state.step2.shuttleHalong !== 'no') {
+    state.step2.shuttleHalong = 'no';
+    const el = document.getElementById('shuttleHalong');
+    if (el) el.value = 'no';
+  }
+  if (!hasSapa && state.step2.limoSapa !== 'no') {
+    state.step2.limoSapa = 'no';
+    const el = document.getElementById('limoSapa');
+    if (el) el.value = 'no';
+  }
+
+  const anyOption = hasHalong || hasSapa;
+  if (optEmpty) optEmpty.style.display = anyOption ? 'none' : '';
+
+  renderDestinationBars(dest);
+}
+
+/**
+ * Render the "Destinations (auto-detected)" chip bar wherever a
+ * [data-destination-bar] exists in the DOM (Step 1 + Step 2 currently).
+ */
+function renderDestinationBars(dest) {
+  const list = Array.isArray(dest) ? dest : detectTourDestinations();
+  document.querySelectorAll('[data-destination-chips]').forEach(container => {
+    if (!list.length) {
+      container.innerHTML = `<span class="destination-empty">Set the itinerary in Step 3 to see the detected cities here.</span>`;
+      return;
+    }
+    container.innerHTML = list.map(code => {
+      const label = getCityLabel(code) || code;
+      const kind = destinationFlavourClass(code);
+      return `<span class="destination-chip ${kind}" title="${escapeHtml(label)} (${code})">${escapeHtml(label)}</span>`;
+    }).join('');
+  });
+}
+
+/** Map city codes to a CSS flavour class for chip tinting. */
+function destinationFlavourClass(code) {
+  if (code === 'HL') return 'dest-halong';
+  if (code === 'SP') return 'dest-sapa';
+  if (code === 'PQ') return 'dest-pq';
+  if (code === 'HA') return 'dest-hoian';
+  if (code === 'DN') return 'dest-danang';
+  if (code === 'HN') return 'dest-hanoi';
+  if (code === 'HC') return 'dest-hcm';
+  return 'dest-generic';
 }
 
 function carSizeLabel(size) {
@@ -359,9 +542,54 @@ function carSizeLabel(size) {
 
 function initStep3() {
   rebuildBriefGridForDates();
+  bindBriefGridDelegation();
 }
 
-/** Sync grid rows to the count of days in the date range. Preserve existing data by dayNum. */
+/**
+ * Single, persistent click delegate on the brief grid <tbody>. Survives
+ * every renderBriefGrid() / refreshRowSuggestions() call so clicks on
+ * dynamically-created .tmpl-rec-btn and .tmpl-new-btn always fire.
+ */
+function bindBriefGridDelegation() {
+  const body = document.getElementById('briefGridBody');
+  if (!body || body.dataset.delegated === '1') return;
+  body.dataset.delegated = '1';
+
+  body.addEventListener('click', (e) => {
+    const recBtn = e.target.closest('.tmpl-rec-btn');
+    const newBtn = e.target.closest('.tmpl-new-btn');
+    if (!recBtn && !newBtn) return;
+
+    const tr = e.target.closest('tr[data-idx]');
+    if (!tr) return;
+    const idx = Number(tr.dataset.idx);
+    const row = state.step3.briefRows[idx];
+    if (!row) return;
+    const templates = getTemplates();
+
+    if (recBtn) {
+      const city = recBtn.dataset.city;
+      const i    = Number(recBtn.dataset.idx);
+      const tmpl = templates[city]?.[i];
+      if (!tmpl) return;
+      row.templateCity = city;
+      row.templateKey  = tmpl.key;
+      row.templateText = tmpl.text || '';
+      row.title        = tmpl.key;
+      const titleEl = tr.querySelector('.row-title');
+      if (titleEl) titleEl.value = tmpl.key;
+      refreshZoneVisibility();
+      refreshRowSuggestions(tr, row, templates);
+      touchStep(3);
+      return;
+    }
+
+    if (newBtn) {
+      openNewTemplateArea(row);
+    }
+  });
+}
+
 function rebuildBriefGridForDates() {
   const from = state.step1.dateFrom;
   const to   = state.step1.dateTo;
@@ -374,7 +602,6 @@ function rebuildBriefGridForDates() {
     for (let i = 0; i < n; i++) {
       const dayNum   = i + 1;
       const existing = byDay.get(dayNum);
-      // Convert legacy meals object → string
       const em = existing?.meals;
       let mealsStr = '';
       if (typeof em === 'string') {
@@ -419,7 +646,7 @@ function renderBriefGrid() {
 
   body.innerHTML = rows.map((row, idx) => {
     const dateShort = formatDateDDMMYYYY(row.date);
-    const recHtml   = buildTemplateSuggestions(row.title, row.templateCity, templates, idx);
+    const recHtml   = buildTemplateSuggestions(row.title, row.templateCity, row.templateKey, templates);
     const hasNewBtn = row.title && !row.templateKey;
 
     return `
@@ -430,17 +657,16 @@ function renderBriefGrid() {
     <div class="cell-date-long">${escapeHtml(row.dateLabel || '')}</div>
   </td>
   <td class="cell-itinerary">
-    <input type="text" class="row-title" value="${escapeHtml(row.title)}" placeholder="Type itinerary title…" />
+    <input type="text" class="row-title" value="${escapeHtml(row.title)}" />
     ${recHtml ? `<div class="tmpl-rec" data-recidx="${idx}">${recHtml}</div>` : ''}
     ${hasNewBtn ? `<button class="tmpl-new-btn" data-newidx="${idx}">📝 Save as new template</button>` : ''}
   </td>
   <td class="cell-meals">
-    <input type="text" class="row-meals" value="${escapeHtml(row.meals || '')}" placeholder="e.g. B/L/D" />
+    <input type="text" class="row-meals" value="${escapeHtml(row.meals || '')}" />
   </td>
 </tr>`;
   }).join('');
 
-  // Wire events
   body.querySelectorAll('tr[data-idx]').forEach(tr => {
     const idx = Number(tr.dataset.idx);
     const row = state.step3.briefRows[idx];
@@ -450,108 +676,135 @@ function renderBriefGrid() {
       applyTemplateMatch(row, tr, templates);
       touchStep(3);
       refreshZoneVisibility();
-      // Update suggestions inline
-      const recDiv = tr.querySelector('.tmpl-rec');
-      const suggestions = buildTemplateSuggestions(row.title, row.templateCity, templates, idx);
-      if (suggestions) {
-        if (recDiv) { recDiv.innerHTML = suggestions; recDiv.style.display = 'block'; }
-        else {
-          const newDiv = document.createElement('div');
-          newDiv.className = 'tmpl-rec';
-          newDiv.dataset.recidx = idx;
-          newDiv.innerHTML = suggestions;
-          tr.querySelector('.cell-itinerary').appendChild(newDiv);
-        }
-      } else if (recDiv) {
-        recDiv.style.display = 'none';
-      }
-      // Show/hide "new template" button
-      let newBtn = tr.querySelector('.tmpl-new-btn');
-      if (row.title && !row.templateKey) {
-        if (!newBtn) {
-          newBtn = document.createElement('button');
-          newBtn.className = 'tmpl-new-btn';
-          newBtn.dataset.newidx = idx;
-          newBtn.textContent = '📝 Save as new template';
-          tr.querySelector('.cell-itinerary').appendChild(newBtn);
-          newBtn.addEventListener('click', () => openNewTemplateArea(row));
-        }
-      } else if (newBtn) {
-        newBtn.remove();
-      }
+      refreshRowSuggestions(tr, row, templates);
     });
 
     tr.querySelector('.row-meals')?.addEventListener('input', e => {
       row.meals = e.target.value;
       touchStep(3);
     });
-
-    // Suggestion clicks (delegated)
-    tr.querySelector('.tmpl-rec')?.addEventListener('click', e => {
-      const btn = e.target.closest('.tmpl-rec-btn');
-      if (!btn) return;
-      const city = btn.dataset.city;
-      const i    = Number(btn.dataset.idx);
-      const tmpl = templates[city]?.[i];
-      if (!tmpl) return;
-      row.templateCity = city;
-      row.templateKey  = tmpl.key;
-      row.templateText = tmpl.text || '';
-      if (!row.title) {
-        row.title = tmpl.key;
-        tr.querySelector('.row-title').value = tmpl.key;
-      }
-      refreshZoneVisibility();
-      renderBriefGrid();
-      touchStep(3);
-    });
-
-    // "New template" button
-    tr.querySelector('.tmpl-new-btn')?.addEventListener('click', () => openNewTemplateArea(row));
   });
 }
 
-/** Find exact match then top-3 closest; returns HTML string for suggestion chips. */
-function buildTemplateSuggestions(title, city, templates, rowIdx) {
-  if (!title || title.trim().length < 3) return '';
-  const t = title.trim().toLowerCase();
-
-  // Exact match → no suggestions needed (already applied)
-  const cities = city ? [city] : Object.keys(templates);
-  for (const c of cities) {
-    for (const tmpl of (templates[c] || [])) {
-      if ((tmpl.key || '').toLowerCase().trim() === t) return ''; // exact match applied
+function refreshRowSuggestions(tr, row, templates) {
+  const cell = tr.querySelector('.cell-itinerary');
+  if (!cell) return;
+  let rec = tr.querySelector('.tmpl-rec');
+  const suggestions = buildTemplateSuggestions(row.title, row.templateCity, row.templateKey, templates);
+  if (suggestions) {
+    if (!rec) {
+      rec = document.createElement('div');
+      rec.className = 'tmpl-rec';
+      const newBtn = cell.querySelector('.tmpl-new-btn');
+      if (newBtn) cell.insertBefore(rec, newBtn);
+      else cell.appendChild(rec);
     }
+    rec.innerHTML = suggestions;
+    // Clear any inline display set by earlier versions so CSS's `flex` applies.
+    rec.style.display = '';
+  } else if (rec) {
+    // No suggestions → hide without nuking the element so flex isn't broken later.
+    rec.innerHTML = '';
+    rec.style.display = 'none';
   }
 
-  // Closest by word overlap
+  let newBtn = tr.querySelector('.tmpl-new-btn');
+  const show = row.title && !row.templateKey;
+  if (show) {
+    if (!newBtn) {
+      newBtn = document.createElement('button');
+      newBtn.className = 'tmpl-new-btn';
+      newBtn.type = 'button';
+      newBtn.textContent = '📝 Save as new template';
+      cell.appendChild(newBtn);
+    }
+  } else if (newBtn) {
+    newBtn.remove();
+  }
+}
+
+/**
+ * Build the suggestion chips block.
+ *
+ *   - Any typed title → list every scored template (not hidden even when the
+ *     title is an exact match, so the user can switch between near-misses).
+ *   - The currently-applied template (by templateKey) gets an `active` chip so
+ *     users can see what's selected without losing visibility of alternatives.
+ *   - When nothing is typed yet, returns a short "browse templates by city"
+ *     placeholder with up to 8 chips from the most-likely city, so a fresh
+ *     grid doesn't look empty.
+ */
+function buildTemplateSuggestions(title, city, activeKey, templates) {
+  const label = `<span class="tmpl-rec-label">Suggestions:</span>`;
+  const t = (title || '').trim().toLowerCase();
+
+  const allCities = Object.keys(templates);
+  const searchCities = city ? [city, ...allCities.filter(c => c !== city)] : allCities;
+
+  // Empty title → browse chips (first 8 templates in the active city, if any).
+  if (!t) {
+    if (!city) return '';
+    const list = (templates[city] || []).slice(0, 8);
+    if (!list.length) return '';
+    const chips = list.map((tmpl, i) =>
+      chipFor(city, i, tmpl.key, activeKey)
+    ).join('');
+    return `${label}${chips}`;
+  }
+
+  // Short title (1-2 chars) → still show chips from the active city if we know it.
+  if (t.length < 3) {
+    if (!city) return '';
+    const list = (templates[city] || []).slice(0, 8);
+    if (!list.length) return '';
+    const chips = list.map((tmpl, i) =>
+      chipFor(city, i, tmpl.key, activeKey)
+    ).join('');
+    return `${label}${chips}`;
+  }
+
+  // Score templates by shared keywords AND exact match (so exact match pins first).
   const words = t.split(/\s+/).filter(w => w.length > 2);
-  if (!words.length) return '';
   const scored = [];
-  for (const c of cities) {
+  for (const c of searchCities) {
     (templates[c] || []).forEach((tmpl, i) => {
       const key = (tmpl.key || '').toLowerCase();
-      const score = words.filter(w => key.includes(w)).length;
+      let score = words.filter(w => key.includes(w)).length;
+      if (key === t) score += 100;  // lock exact match on top.
       if (score > 0) scored.push({ c, i, score, key: tmpl.key });
     });
   }
-  if (!scored.length) return '';
-  const top = scored.sort((a, b) => b.score - a.score).slice(0, 3);
-  const chips = top.map(s =>
-    `<button type="button" class="tmpl-rec-btn" data-city="${s.c}" data-idx="${s.i}" title="${escapeHtml(s.key)}">${escapeHtml((s.key || '').slice(0, 50))}</button>`
-  ).join('');
-  return `<span class="tmpl-rec-label">Closest:</span> ${chips}`;
+
+  if (!scored.length) {
+    // Still offer the active-city catalogue so users can eyeball alternatives.
+    if (!city) return '';
+    const list = (templates[city] || []).slice(0, 8);
+    if (!list.length) return '';
+    const chips = list.map((tmpl, i) =>
+      chipFor(city, i, tmpl.key, activeKey)
+    ).join('');
+    return `${label}${chips}`;
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const chips = scored.map(s => chipFor(s.c, s.i, s.key, activeKey)).join('');
+  return `${label}${chips}`;
 }
 
-/** Try to auto-apply an exact template match when user types. */
+function chipFor(city, idx, key, activeKey) {
+  const isActive = activeKey && activeKey === key;
+  return `<button type="button"
+    class="tmpl-rec-btn${isActive ? ' active' : ''}"
+    data-city="${city}" data-idx="${idx}"
+    title="[${city}] ${escapeHtml(key || '')}">[${city}] ${escapeHtml(key || '')}</button>`;
+}
+
 function applyTemplateMatch(row, tr, templates) {
   const t = (row.title || '').trim().toLowerCase();
-  if (!t) return;
-  // Detect city from title
+  if (!t) { row.templateKey = ''; row.templateText = ''; return; }
   const guessedCity = detectCityFromTitle(row.title);
   if (guessedCity && !row.templateCity) row.templateCity = guessedCity;
-  // Exact match search
-  const searchCities = row.templateCity ? [row.templateCity] : Object.keys(templates);
+  const searchCities = row.templateCity ? [row.templateCity, ...Object.keys(templates).filter(c => c !== row.templateCity)] : Object.keys(templates);
   for (const c of searchCities) {
     for (const tmpl of (templates[c] || [])) {
       if ((tmpl.key || '').trim().toLowerCase() === t) {
@@ -562,14 +815,12 @@ function applyTemplateMatch(row, tr, templates) {
       }
     }
   }
-  // No exact match — clear stale template text (but keep city)
   if (row.templateKey && (row.templateKey || '').trim().toLowerCase() !== t) {
     row.templateKey  = '';
     row.templateText = '';
   }
 }
 
-/** Open the "new template" form below the grid, pre-filled with the row's data. */
 function openNewTemplateArea(row) {
   const area = document.getElementById('newTemplateArea');
   if (!area) return;
@@ -577,19 +828,12 @@ function openNewTemplateArea(row) {
   area.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   const citySelect = document.getElementById('ntCity');
-  if (citySelect && !citySelect.options.length) {
-    // Populate city select once
-    Object.entries(CITY_LABELS).forEach(([code, label]) => {
-      const opt = document.createElement('option');
-      opt.value = code; opt.textContent = label;
-      citySelect.appendChild(opt);
-    });
-  }
   if (citySelect) citySelect.value = row.templateCity || '';
   const keyEl = document.getElementById('ntKey');
   if (keyEl) keyEl.value = row.title || '';
   const textEl = document.getElementById('ntText');
   if (textEl) textEl.value = '';
+  area.dataset.srcDay = String(row.dayNum || '');
 }
 
 function initNewTemplateArea() {
@@ -601,18 +845,20 @@ function initNewTemplateArea() {
     saveBtn.addEventListener('click', () => {
       const city = document.getElementById('ntCity')?.value;
       const key  = document.getElementById('ntKey')?.value?.trim();
-      const text = document.getElementById('ntText')?.value?.trim();
+      const text = document.getElementById('ntText')?.value || '';
       if (!city || !key) { showToast('Choose a city and enter a template name.', 'error'); return; }
-      // Import addTemplate from admin-manager (already available via initAdminUI)
-      try {
-        const { addTemplate } = (window.__adminManager || {});
-        if (addTemplate) addTemplate(city, key, text);
-        else {
-          // Fallback: dispatch to admin-manager by calling getTemplates + saveTemplates via the same module
-          showToast('Template saved (reload Admin to confirm).', 'success');
-        }
-      } catch (_) {}
+      try { adminAddTemplate(city, key, text); } catch (_) {}
       showToast(`Template "${key}" saved!`, 'success');
+      // If we remember which row triggered the save, auto-apply
+      const day = Number(area?.dataset?.srcDay);
+      if (day) {
+        const row = state.step3.briefRows.find(r => r.dayNum === day);
+        if (row) {
+          row.templateCity = city;
+          row.templateKey  = key;
+          row.templateText = text;
+        }
+      }
       if (area) area.style.display = 'none';
       renderBriefGrid();
     });
@@ -633,26 +879,31 @@ function initStep4() {
       touchStep(4);
     });
   });
-  // Star tier toggle is now per-stay; no global tier toggle.
+  initStayEditModal();
 }
 
-/** Recompute stays from briefRows and preserve matching selections and star choices. */
 function recomputeStaysPreserve() {
   const newStays = computeStays(state.step3.briefRows);
   const oldSel        = state.step4.selections    || {};
   const oldStarChoice = state.step4.stayStarChoice || {};
   const newSel        = {};
   const newStarChoice = {};
+  // Keep ONLY entries whose stay ID survives. Anything else is dropped so
+  // state.step4 never accumulates orphan keys from deleted days.
   for (const s of newStays) {
-    if (oldSel[s.id])        newSel[s.id]        = oldSel[s.id];
+    if (oldSel[s.id])       newSel[s.id]       = oldSel[s.id];
     newStarChoice[s.id] = oldStarChoice[s.id] || '4';
   }
-  state.step4.stays        = newStays;
-  state.step4.selections   = newSel;
+  state.step4.stays          = newStays;
+  state.step4.selections     = newSel;
   state.step4.stayStarChoice = newStarChoice;
   renderStep4Stays();
 }
 
+/**
+ * Step 4 now renders one compact *summary card* per stay. All config happens
+ * in the dedicated Edit-stay modal (see initStayEditModal / openStayEditModal).
+ */
 function renderStep4Stays() {
   const container = document.getElementById('staysContainer');
   if (!container) return;
@@ -665,41 +916,16 @@ function renderStep4Stays() {
 
   const hotelsByStars = getHotels();
 
-  container.innerHTML = stays.map(stay => {
-    const nightsLabel = stay.nights > 0
-      ? `${stay.nights} night${stay.nights !== 1 ? 's' : ''}`
-      : 'no overnight';
-    const dayLbl = stay.endDay !== stay.startDay
-      ? `Day ${stay.startDay}–${stay.endDay}`
-      : `Day ${stay.startDay}`;
+  container.innerHTML = stays.map(stay =>
+    renderStaySummaryCard(stay, hotelsByStars)
+  ).join('') + renderGrandTotal(stays, hotelsByStars);
 
-    const currentStar = state.step4.stayStarChoice[stay.id] || '4';
-    const starToggle = ['3','4','5'].map(s =>
-      `<button type="button" class="star-opt${s === currentStar ? ' active' : ''}" data-star="${s}">${'★'.repeat(Number(s))} ${s}★</button>`
-    ).join('');
+  // Bind per-card controls once. The cards themselves never re-render on
+  // number input (that happens inside the modal only).
+  container.querySelectorAll('.stay-summary-card').forEach(card => {
+    const stayId = card.dataset.stayId;
 
-    const hotelContent = renderStayHotelContent(stay, currentStar, hotelsByStars);
-
-    return `
-<div class="stay-block" data-stay-id="${stay.id}">
-  <div class="stay-block-heading">
-    ${escapeHtml(getCityLabel(stay.city))} — ${dayLbl}
-    <span class="stay-heading-nights">${nightsLabel}</span>
-  </div>
-  <div class="stay-star-hotel-row">
-    <div class="stay-star-toggle">${starToggle}</div>
-    <div class="stay-hotel-select-wrap">${hotelContent}</div>
-  </div>
-</div>`;
-  }).join('');
-
-  // Bind events for each stay block
-  container.querySelectorAll('.stay-block').forEach(block => {
-    const stayId = block.dataset.stayId;
-    const hotelsByStarsLocal = hotelsByStars;
-
-    // Star toggle
-    block.querySelectorAll('.star-opt').forEach(btn => {
+    card.querySelectorAll('.star-opt').forEach(btn => {
       btn.addEventListener('click', () => {
         state.step4.stayStarChoice[stayId] = btn.dataset.star;
         renderStep4Stays();
@@ -707,151 +933,471 @@ function renderStep4Stays() {
       });
     });
 
-    const currentStar = state.step4.stayStarChoice[stayId] || '4';
-    bindStayTierEvents(block, stayId, currentStar, hotelsByStarsLocal);
+    card.querySelector('.stay-edit-btn')?.addEventListener('click', () => {
+      openStayEditModal(stayId);
+    });
   });
 }
 
-/** Renders hotel selector + room inputs for the currently chosen star tier of a stay. */
-function renderStayHotelContent(stay, tier, hotelsByStars) {
-  const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
-  const sel = state.step4.selections?.[stay.id]?.[tier];
-
-  if (!hotels.length) {
-    return `<p class="no-dest-msg" style="margin:0">No ${tier}-star hotels for ${getCityLabel(stay.city)}. Add via Admin → Hotels.</p>`;
-  }
-
-  const selectedId    = sel?.hotelId || hotels[0].id;
-  const selectedHotel = hotels.find(h => h.id === selectedId) || hotels[0];
-  const hotelOpts     = hotels.map(h =>
-    `<option value="${h.id}" ${h.id === selectedId ? 'selected' : ''}>${escapeHtml(h.name)}</option>`
+function renderStaySummaryCard(stay, hotelsByStars) {
+  const tier         = state.step4.stayStarChoice[stay.id] || '4';
+  const nightsLabel  = stay.nights > 0 ? `${stay.nights} night${stay.nights !== 1 ? 's' : ''}` : 'no overnight';
+  const dayLbl       = stay.endDay !== stay.startDay ? `Day ${stay.startDay}–${stay.endDay}` : `Day ${stay.startDay}`;
+  const starToggle   = ['3','4','5'].map(s =>
+    `<button type="button" class="star-opt${s === tier ? ' active' : ''}" data-star="${s}">${s}★</button>`
   ).join('');
 
-  const rooms2     = sel?.rooms2pax     ?? 0;
-  const rooms3     = sel?.rooms3pax     ?? 0;
-  const extraBeds  = sel?.extraBeds     ?? 0;
-  const shareBeds  = sel?.shareBeds     ?? 0;
-  const focRooms   = sel?.focRooms      ?? 0;
-  const eciDay     = sel?.earlyCheckinDay || '';
-  const hasUpgrade = !!sel?.upgrade;
+  // Resolve the current selection (seed if missing).
+  const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
+  if (!state.step4.selections[stay.id]) state.step4.selections[stay.id] = {};
+  let sel = state.step4.selections[stay.id][tier];
+  if (hotels.length && (!sel || !hotels.find(h => h.id === sel.hotelId))) {
+    sel = emptySelection(hotels[0]);
+    state.step4.selections[stay.id][tier] = sel;
+  }
 
-  const perPaxHtml = computePerPaxDisplay(stay, tier, selectedHotel,
-    { rooms2pax: rooms2, rooms3pax: rooms3, focRooms, earlyCheckinDay: eciDay, upgrade: hasUpgrade });
-
-  const dayOptions = (() => {
-    const opts = [`<option value="">(no early check-in)</option>`];
-    for (let d = stay.startDay; d <= stay.endDay; d++) {
-      opts.push(`<option value="${d}" ${String(eciDay) === String(d) ? 'selected' : ''}>Day ${d}</option>`);
+  let body = '';
+  if (!hotels.length) {
+    body = `<div class="stay-summary-empty">⚠ No ${tier}★ hotels for ${escapeHtml(getCityLabel(stay.city))}. Add via Admin → Hotels.</div>`;
+  } else if (!sel || !sel.hotelId) {
+    body = `<div class="stay-summary-empty">No hotel selected yet.</div>`;
+  } else {
+    const hotel = hotels.find(h => h.id === sel.hotelId) || hotels[0];
+    if (!(hotel.roomTypes || []).find(rt => rt.id === sel.roomTypeId)) {
+      sel.roomTypeId = hotel.roomTypes?.[0]?.id || '';
     }
-    return opts.join('');
-  })();
+    const rt = findRoomType(hotel, sel.roomTypeId);
+    const bd = buildStayBreakdown({
+      stay, sel, hotel, state,
+      groupType: state.step4.groupType,
+      dateFrom: state.step1.dateFrom,
+    });
 
-  const upgradeCtl = selectedHotel.upgrade
-    ? `<label class="checkbox-inline"><input type="checkbox" class="stay-upgrade" ${hasUpgrade ? 'checked' : ''} /> Upgrade → ${escapeHtml(selectedHotel.upgrade.roomType)} (+${formatMoney(selectedHotel.upgrade.ratePerNight, selectedHotel.currency)}/night)</label>`
-    : `<div class="helper-text">No upgrade option for this hotel.</div>`;
+    const redDots = [];
+    if ((hotel.flags || []).includes('redFlag'))     redDots.push('Hotel');
+    if ((rt?.flags   || []).includes('redFlag'))     redDots.push('Room');
+    const redLine = redDots.length
+      ? `<div class="stay-summary-warn">🚩 Red flag: ${redDots.join(' & ')}</div>`
+      : '';
+    const ebWarn = rt?.extraBedAllowed === false
+      ? `<div class="stay-summary-warn">🚫 No extra bed on this room type.</div>`
+      : '';
+    const flexBadge = rt?.flexiblePrice ? `<span class="flag-badge flag-flex">Flexible</span>` : '';
+    const overrideBadge = bd.overridden ? `<span class="accom-override">Custom rate</span>` : '';
+    const seasonBadge = bd.season === 'high'
+      ? `<span class="accom-season high">High Season</span>`
+      : `<span class="accom-season low">Low Season</span>`;
+    const vatTag = hotel.vatIncluded
+      ? `<span class="accom-vat incl">VAT incl.</span>`
+      : `<span class="accom-vat excl">+ VAT</span>`;
+
+    const roomsLine = bd.totalRooms > 0
+      ? `${bd.totalRooms} room${bd.totalRooms !== 1 ? 's' : ''}${bd.focRooms ? ` (${bd.focRooms} FOC)` : ''}`
+      : `<span style="color:#c0392b">0 rooms — open Edit</span>`;
+
+    const extras = [];
+    if (sel.earlyCheckinDay) extras.push(`ECI day ${sel.earlyCheckinDay}`);
+    if (sel.upgradeRoomTypeId) {
+      const u = findRoomType(hotel, sel.upgradeRoomTypeId);
+      if (u) extras.push(`→ ${u.name}`);
+    }
+    const extrasLine = extras.length ? `<div class="stay-summary-extras">+ ${extras.join(' · ')}</div>` : '';
+
+    body = `
+<div class="stay-summary-hotel">
+  <div class="stay-summary-hotel-name">${escapeHtml(hotel.name)} ${flexBadge}</div>
+  <div class="stay-summary-meta">${escapeHtml(rt?.name || '—')} · ${seasonBadge} ${vatTag} ${overrideBadge}</div>
+  ${redLine}${ebWarn}
+</div>
+<div class="stay-summary-quote">
+  <div class="stay-summary-rooms">${roomsLine}</div>
+  ${extrasLine}
+  <div class="stay-summary-perpax">
+    <span class="stay-summary-perpax-label">Per pax</span>
+    <span class="stay-summary-perpax-value">${formatPerPax(bd.perPax, bd.currency)}</span>
+  </div>
+  <div class="stay-summary-grand">Total ${formatMoney(bd.grandTotal, bd.currency)} · ${bd.totalPax} pax · ${bd.nights} night${bd.nights !== 1 ? 's' : ''}</div>
+</div>`;
+  }
 
   return `
-<div class="stay-hotel-row">
-  <select class="stay-hotel">${hotelOpts}</select>
-  <span class="vat-tag ${selectedHotel.vatIncluded ? 'vat-included' : 'vat-excluded'}">${selectedHotel.vatIncluded ? 'VAT incl.' : '+VAT'}</span>
-</div>
-<div class="helper-text" style="margin-bottom:6px">${escapeHtml(selectedHotel.roomType || '')}</div>
-<div class="stay-rooms-row">
-  <div class="mini-field"><label>2-pax rooms</label><input type="number" min="0" class="stay-r2" value="${rooms2}" /></div>
-  <div class="mini-field"><label>3-pax rooms</label><input type="number" min="0" class="stay-r3" value="${rooms3}" /></div>
-  <div class="mini-field"><label>Extra beds</label><input type="number" min="0" class="stay-eb" value="${extraBeds}" /></div>
-  <div class="mini-field"><label>Share beds</label><input type="number" min="0" class="stay-sb" value="${shareBeds}" /></div>
-</div>
-<div class="stay-rooms-row" style="grid-template-columns:1fr 1fr">
-  <div class="mini-field"><label>FOC rooms</label><input type="number" min="0" class="stay-foc" value="${focRooms}" /></div>
-  <div class="mini-field"><label>Early check-in day</label><select class="stay-eci">${dayOptions}</select></div>
-</div>
-<div class="stay-surcharges"><div>${upgradeCtl}</div><div></div></div>
-<div class="stay-ppax-line" data-ppax-line>${perPaxHtml}</div>`;
+<div class="stay-summary-card stay-block" data-stay-id="${stay.id}">
+  <div class="stay-summary-heading">
+    <div class="stay-summary-heading-text">
+      ${escapeHtml(getCityLabel(stay.city))} — ${dayLbl}
+      <span class="stay-heading-nights">${nightsLabel}</span>
+    </div>
+    <div class="stay-star-toggle stay-star-toggle-inline">${starToggle}</div>
+    <button type="button" class="btn-primary-sm stay-edit-btn">✏️ Edit</button>
+  </div>
+  <div class="stay-summary-body">${body}</div>
+</div>`;
 }
 
-function bindStayTierEvents(block, stayId, tier, hotelsByStars) {
-  const ensure = () => {
-    if (!state.step4.selections[stayId]) state.step4.selections[stayId] = {};
-    if (!state.step4.selections[stayId][tier]) state.step4.selections[stayId][tier] = emptySelection();
-    return state.step4.selections[stayId][tier];
-  };
-
-  const hotelEl = block.querySelector('.stay-hotel');
-  if (hotelEl) {
-    ensure().hotelId = ensure().hotelId || hotelEl.value;
-    hotelEl.addEventListener('change', e => {
-      ensure().hotelId = e.target.value;
-      renderStep4Stays();
-      touchStep(4);
+function renderGrandTotal(stays, hotelsByStars) {
+  let sum = 0;
+  let currency = null;
+  const currencies = new Set();
+  let anyConfigured = false;
+  for (const stay of stays) {
+    const tier  = state.step4.stayStarChoice[stay.id] || '4';
+    const sel   = state.step4.selections?.[stay.id]?.[tier];
+    const hotel = sel?.hotelId ? (hotelsByStars[tier] || []).find(h => h.id === sel.hotelId) : null;
+    if (!hotel) continue;
+    const bd = buildStayBreakdown({
+      stay, sel, hotel, state,
+      groupType: state.step4.groupType,
+      dateFrom: state.step1.dateFrom,
     });
+    if (bd.grandTotal > 0) anyConfigured = true;
+    if (currency == null) currency = bd.currency;
+    currencies.add(bd.currency);
+    sum += bd.grandTotal;
+  }
+  if (!anyConfigured) return '';
+
+  if (currencies.size > 1) {
+    return `<div class="accom-grand-total mixed">
+      <div class="accom-grand-total-label">Accommodation total</div>
+      <div class="accom-grand-total-value">Multiple currencies — see per-stay totals above.</div>
+    </div>`;
   }
 
-  const numField = (cls, key) => {
-    const el = block.querySelector(cls);
+  const adults   = Number(state.step1.adults   || 0);
+  const children = Number(state.step1.children || 0);
+  const totalPax = Math.max(1, adults + children);
+  const perPax   = sum / totalPax;
+
+  return `<div class="accom-grand-total">
+    <div class="accom-grand-total-label">Accommodation grand total (all stays)</div>
+    <div class="accom-grand-total-value">${formatMoney(sum, currency)} &nbsp;·&nbsp; ${formatPerPax(perPax, currency)} &nbsp;·&nbsp; ${totalPax} pax</div>
+  </div>`;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  STEP 4 — Stay edit modal (controller)
+// ──────────────────────────────────────────────────────────────────────
+
+const stayEdit = {
+  stayId: null,
+  tier: null,
+  draft: null,   // working copy of the selection — committed on Save
+};
+
+function initStayEditModal() {
+  const modal = document.getElementById('stayEditModal');
+  if (!modal) return;
+
+  modal.querySelectorAll('[data-close="stayEditModal"]').forEach(btn => {
+    btn.addEventListener('click', closeStayEditModal);
+  });
+
+  document.getElementById('smHotel')?.addEventListener('change', e => {
+    stayEdit.draft.hotelId = e.target.value;
+    stayEdit.draft.roomTypeId = '';
+    stayEdit.draft.upgradeRoomTypeId = null;
+    stayEdit.draft.priceOverride = null;
+    refreshStayEditModal({ repopulateLists: true });
+  });
+
+  document.querySelectorAll('#smStarToggle .pill-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tier = btn.dataset.star;
+      if (!tier || tier === stayEdit.tier) return;
+      document.querySelectorAll('#smStarToggle .pill-opt').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      stayEdit.tier = tier;
+      state.step4.stayStarChoice[stayEdit.stayId] = tier;
+      // Try to inherit existing selection for that tier; otherwise fresh.
+      const existing = state.step4.selections[stayEdit.stayId]?.[tier];
+      if (existing) {
+        stayEdit.draft = { ...existing };
+      } else {
+        const hotelsByStars = getHotels();
+        const hotels = (hotelsByStars[tier] || []).filter(h => h.city === currentStay()?.city && !(h.flags || []).includes('skip'));
+        stayEdit.draft = emptySelection(hotels[0] || null);
+      }
+      refreshStayEditModal({ repopulateLists: true });
+    });
+  });
+
+  document.getElementById('smRoomType')?.addEventListener('change', e => {
+    stayEdit.draft.roomTypeId = e.target.value;
+    stayEdit.draft.upgradeRoomTypeId = null;
+    stayEdit.draft.priceOverride = null;
+    refreshStayEditModal({ repopulateLists: true });
+  });
+
+  document.getElementById('smUpgradeRt')?.addEventListener('change', e => {
+    stayEdit.draft.upgradeRoomTypeId = e.target.value || null;
+    refreshStayEditModal();
+  });
+
+  const numBind = (id, key) => {
+    const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('input', e => {
-      ensure()[key] = Math.max(0, parseInt(e.target.value) || 0);
-      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
-      touchStep(4);
+      stayEdit.draft[key] = Math.max(0, parseInt(e.target.value) || 0);
+      refreshStayEditModal();
     });
   };
-  numField('.stay-r2',  'rooms2pax');
-  numField('.stay-r3',  'rooms3pax');
-  numField('.stay-eb',  'extraBeds');
-  numField('.stay-sb',  'shareBeds');
-  numField('.stay-foc', 'focRooms');
+  numBind('smR2',  'rooms2pax');
+  numBind('smR3',  'rooms3pax');
+  numBind('smEb',  'extraBeds');
+  numBind('smSb',  'shareBeds');
+  numBind('smFoc', 'focRooms');
 
-  const eciEl = block.querySelector('.stay-eci');
-  if (eciEl) {
-    eciEl.addEventListener('change', e => {
-      ensure().earlyCheckinDay = e.target.value ? Number(e.target.value) : null;
-      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
-      touchStep(4);
-    });
-  }
+  document.getElementById('smEci')?.addEventListener('change', e => {
+    stayEdit.draft.earlyCheckinDay = e.target.value ? Number(e.target.value) : null;
+    refreshStayEditModal();
+  });
 
-  const upgradeEl = block.querySelector('.stay-upgrade');
-  if (upgradeEl) {
-    upgradeEl.addEventListener('change', e => {
-      ensure().upgrade = !!e.target.checked;
-      refreshPerPaxLine(block, stayId, tier, hotelsByStars);
-      touchStep(4);
-    });
-  }
+  document.getElementById('smPriceOverride')?.addEventListener('input', e => {
+    const v = e.target.value.trim();
+    stayEdit.draft.priceOverride = v === '' ? null : Number(v);
+    refreshStayEditModal();
+  });
+
+  document.getElementById('smSuggestFocBtn')?.addEventListener('click', () => {
+    const hotel = currentHotel();
+    if (!hotel) return;
+    const totalRooms = (Number(stayEdit.draft.rooms2pax) || 0) + (Number(stayEdit.draft.rooms3pax) || 0);
+    const suggestion = suggestFocCount(hotel, totalRooms);
+    stayEdit.draft.focRooms = suggestion;
+    const focEl = document.getElementById('smFoc');
+    if (focEl) focEl.value = String(suggestion);
+    refreshStayEditModal();
+    const rule = hotel.focRule;
+    const helper = document.getElementById('smFocHelper');
+    if (helper) {
+      helper.textContent = rule?.everyRooms
+        ? `Rule: every ${rule.everyRooms} rooms → ${rule.freeRooms} FOC. Booked ${totalRooms} rooms → ${suggestion} FOC.`
+        : 'No FOC rule on this hotel.';
+    }
+  });
+
+  document.getElementById('smSaveBtn')?.addEventListener('click', () => {
+    // Commit the draft into state.
+    if (!state.step4.selections[stayEdit.stayId]) state.step4.selections[stayEdit.stayId] = {};
+    state.step4.selections[stayEdit.stayId][stayEdit.tier] = { ...stayEdit.draft };
+    closeStayEditModal();
+    renderStep4Stays();
+    touchStep(4);
+    showToast('Stay updated.', 'success');
+  });
 }
 
-function refreshPerPaxLine(block, stayId, tier, hotelsByStars) {
-  const stay  = state.step4.stays.find(s => s.id === stayId);
-  const sel   = state.step4.selections[stayId]?.[tier];
-  const hotel = (hotelsByStars[tier] || []).find(h => h.id === sel?.hotelId);
-  const lineEl = block.querySelector('[data-ppax-line]');
-  if (!stay || !hotel || !lineEl) return;
-  lineEl.innerHTML = computePerPaxDisplay(stay, tier, hotel, sel);
+function currentStay() {
+  return state.step4.stays.find(s => s.id === stayEdit.stayId) || null;
+}
+function currentHotel() {
+  const stay = currentStay();
+  if (!stay) return null;
+  const hotelsByStars = getHotels();
+  const list = (hotelsByStars[stayEdit.tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
+  return list.find(h => h.id === stayEdit.draft.hotelId) || null;
 }
 
-function computePerPaxDisplay(stay, tier, hotel, sel) {
-  const { ratePerRoom, season } = pickRate(hotel, state.step4.groupType, stay.rows?.[0]?.date || state.step1.dateFrom);
-  const rooms2     = Number(sel?.rooms2pax || 0);
-  const rooms3     = Number(sel?.rooms3pax || 0);
-  const totalRooms = rooms2 + rooms3;
-  const focRooms   = Number(sel?.focRooms || 0);
-  const totalPax   = Math.max(1, (Number(state.step1.adults) || 0) + (Number(state.step1.children) || 0));
-  const paxPerRoom = totalRooms > 0 ? Math.max(1, Math.round(totalPax / totalRooms)) : 2;
-  const perPax     = calcPerPax({ ratePerRoom, totalRooms, focRooms, totalPax, nights: stay.nights });
-  const currency   = hotel.currency || 'USD';
+function openStayEditModal(stayId) {
+  const stay = state.step4.stays.find(s => s.id === stayId);
+  if (!stay) return;
+  const tier = state.step4.stayStarChoice[stayId] || '4';
+  const sel = state.step4.selections[stayId]?.[tier] || emptySelection();
+  stayEdit.stayId = stayId;
+  stayEdit.tier   = tier;
+  stayEdit.draft  = { ...sel };
 
-  const extras = [];
-  if (sel?.earlyCheckinDay) {
-    extras.push(`ECI: ${formatPerPax(calcEarlyCheckin(hotel, ratePerRoom, paxPerRoom), currency)}`);
+  document.querySelectorAll('#smStarToggle .pill-opt').forEach(b => {
+    b.classList.toggle('active', b.dataset.star === tier);
+  });
+
+  document.getElementById('stayModalTitle').textContent =
+    `${getCityLabel(stay.city)} — Day ${stay.startDay}${stay.endDay !== stay.startDay ? '–' + stay.endDay : ''} (${stay.nights} night${stay.nights !== 1 ? 's' : ''})`;
+
+  refreshStayEditModal({ repopulateLists: true });
+
+  const modal = document.getElementById('stayEditModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeStayEditModal() {
+  const modal = document.getElementById('stayEditModal');
+  if (modal) modal.style.display = 'none';
+  stayEdit.stayId = null;
+  stayEdit.tier = null;
+  stayEdit.draft = null;
+}
+
+/**
+ * Repaint the stay-edit modal from `stayEdit.draft`.
+ * - repopulateLists: rebuild the hotel + room-type + upgrade + ECI lists.
+ * - Otherwise only the price breakdown + helper-text zones update.
+ */
+function refreshStayEditModal({ repopulateLists = false } = {}) {
+  if (!stayEdit.stayId || !stayEdit.draft) return;
+  const stay = currentStay();
+  if (!stay) return;
+
+  const tier = stayEdit.tier;
+  const hotelsByStars = getHotels();
+  const hotels = (hotelsByStars[tier] || []).filter(h => h.city === stay.city && !(h.flags || []).includes('skip'));
+
+  if (!hotels.length) {
+    // Nothing to choose — grey everything out
+    const breakdown = document.getElementById('smBreakdown');
+    if (breakdown) breakdown.innerHTML = `<div class="helper-text">No ${tier}★ hotels available for ${escapeHtml(getCityLabel(stay.city))}. Add via Admin → Hotels.</div>`;
+    if (repopulateLists) {
+      const hEl = document.getElementById('smHotel'); if (hEl) hEl.innerHTML = '<option value="">—</option>';
+      const rEl = document.getElementById('smRoomType'); if (rEl) rEl.innerHTML = '';
+      const uEl = document.getElementById('smUpgradeRt'); if (uEl) uEl.innerHTML = '';
+    }
+    return;
   }
-  if (sel?.upgrade && hotel.upgrade) {
-    extras.push(`Upgrade: ${formatPerPax(calcUpgrade(hotel.upgrade, stay.nights, paxPerRoom), currency)}`);
+
+  // Default a hotel if we haven't picked one yet.
+  if (!stayEdit.draft.hotelId || !hotels.find(h => h.id === stayEdit.draft.hotelId)) {
+    stayEdit.draft.hotelId = hotels[0].id;
+    stayEdit.draft.roomTypeId = hotels[0].roomTypes?.[0]?.id || '';
   }
-  const extraHtml = extras.length
-    ? ` <span style="color:#856404;font-weight:500">&nbsp;(+ ${extras.join(' + ')})</span>` : '';
-  const seasonLbl = season === 'high' ? 'High' : 'Low';
-  return `<strong>Per pax:</strong> ${formatPerPax(perPax, currency)}${extraHtml} <small style="color:#666;font-weight:400">· ${seasonLbl} season · ${totalRooms} room${totalRooms !== 1 ? 's' : ''}${focRooms ? ` (${focRooms} FOC)` : ''}</small>`;
+  const hotel = hotels.find(h => h.id === stayEdit.draft.hotelId);
+  if (!(hotel.roomTypes || []).find(rt => rt.id === stayEdit.draft.roomTypeId)) {
+    stayEdit.draft.roomTypeId = hotel.roomTypes?.[0]?.id || '';
+  }
+  const rt = findRoomType(hotel, stayEdit.draft.roomTypeId);
+
+  if (repopulateLists) {
+    // Hotel dropdown
+    const hEl = document.getElementById('smHotel');
+    if (hEl) {
+      hEl.innerHTML = hotels.map(h => {
+        const red = (h.flags || []).includes('redFlag') ? ' 🚩' : '';
+        return `<option value="${h.id}" ${h.id === stayEdit.draft.hotelId ? 'selected' : ''}>${escapeHtml(h.name)}${red}</option>`;
+      }).join('');
+    }
+    // Room type dropdown
+    const rEl = document.getElementById('smRoomType');
+    if (rEl) {
+      rEl.innerHTML = (hotel.roomTypes || []).map(rtOpt => {
+        const red = (rtOpt.flags || []).includes('redFlag') ? ' 🚩' : '';
+        const flex = rtOpt.flexiblePrice ? ' 💲' : '';
+        return `<option value="${rtOpt.id}" ${rtOpt.id === stayEdit.draft.roomTypeId ? 'selected' : ''}>${escapeHtml(rtOpt.name)}${red}${flex}</option>`;
+      }).join('');
+    }
+    // Upgrade dropdown
+    const uEl = document.getElementById('smUpgradeRt');
+    if (uEl) {
+      uEl.innerHTML = [
+        `<option value="">(no upgrade)</option>`,
+        ...(hotel.roomTypes || [])
+          .filter(rtOpt => rtOpt.id !== stayEdit.draft.roomTypeId)
+          .map(rtOpt => `<option value="${rtOpt.id}" ${rtOpt.id === stayEdit.draft.upgradeRoomTypeId ? 'selected' : ''}>Upgrade → ${escapeHtml(rtOpt.name)}</option>`),
+      ].join('');
+    }
+    // ECI day dropdown
+    const eciEl = document.getElementById('smEci');
+    if (eciEl) {
+      const curr = stayEdit.draft.earlyCheckinDay || '';
+      const opts = [`<option value="">(no early check-in)</option>`];
+      for (let d = stay.startDay; d <= stay.endDay; d++) {
+        opts.push(`<option value="${d}" ${String(curr) === String(d) ? 'selected' : ''}>Day ${d}</option>`);
+      }
+      eciEl.innerHTML = opts.join('');
+    }
+    // Numeric inputs
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? 0; };
+    setVal('smR2',  stayEdit.draft.rooms2pax ?? 0);
+    setVal('smR3',  stayEdit.draft.rooms3pax ?? 0);
+    setVal('smEb',  stayEdit.draft.extraBeds ?? 0);
+    setVal('smSb',  stayEdit.draft.shareBeds ?? 0);
+    setVal('smFoc', stayEdit.draft.focRooms  ?? 0);
+    const poEl = document.getElementById('smPriceOverride');
+    if (poEl) poEl.value = stayEdit.draft.priceOverride ?? '';
+  }
+
+  // Flags around the hotel select + extra-bed warn + flex block visibility
+  const hotelFlagsEl = document.getElementById('smHotelFlags');
+  if (hotelFlagsEl) {
+    const chips = [];
+    if ((hotel.flags || []).includes('redFlag'))  chips.push(`<span class="flag-badge flag-redFlag">🚩 Red flag</span>`);
+    if ((hotel.flags || []).includes('gitOnly'))  chips.push(`<span class="flag-badge">GIT only</span>`);
+    if ((hotel.flags || []).includes('dayCruiseOnly')) chips.push(`<span class="flag-badge">Day cruise only</span>`);
+    hotelFlagsEl.innerHTML = chips.join(' ');
+  }
+  const rtFlagsEl = document.getElementById('smRoomTypeFlags');
+  if (rtFlagsEl) {
+    const chips = [];
+    if ((rt?.flags || []).includes('redFlag')) chips.push(`<span class="flag-badge flag-redFlag">🚩 Red flag</span>`);
+    if (rt?.flexiblePrice)                     chips.push(`<span class="flag-badge flag-flex">Flexible price</span>`);
+    if (rt?.extraBedAllowed === false)         chips.push(`<span class="flag-badge">No extra bed</span>`);
+    rtFlagsEl.innerHTML = chips.join(' ');
+  }
+  const ebWarnEl = document.getElementById('smEbWarn');
+  if (ebWarnEl) ebWarnEl.style.display = (rt?.extraBedAllowed === false) ? 'block' : 'none';
+  const ebEl = document.getElementById('smEb');
+  if (ebEl) {
+    ebEl.disabled = (rt?.extraBedAllowed === false);
+    if (rt?.extraBedAllowed === false) {
+      ebEl.value = '0';
+      stayEdit.draft.extraBeds = 0;
+    }
+  }
+  const flexBlock = document.getElementById('smFlexBlock');
+  if (flexBlock) flexBlock.style.display = rt?.flexiblePrice ? 'block' : 'none';
+
+  // FOC helper — show rule summary
+  const helper = document.getElementById('smFocHelper');
+  if (helper) {
+    const rule = hotel.focRule;
+    helper.textContent = rule?.everyRooms
+      ? `Rule: every ${rule.everyRooms} rooms → ${rule.freeRooms} FOC.`
+      : 'No FOC rule configured on this hotel.';
+  }
+
+  // Breakdown
+  const bd = buildStayBreakdown({
+    stay,
+    sel: stayEdit.draft,
+    hotel,
+    state,
+    groupType: state.step4.groupType,
+    dateFrom: state.step1.dateFrom,
+  });
+  const breakdownEl = document.getElementById('smBreakdown');
+  if (breakdownEl) breakdownEl.innerHTML = renderBreakdownTable(bd);
+}
+
+function renderBreakdownTable(bd) {
+  if (!bd || !bd.rows?.length) return `<div class="helper-text">No data yet.</div>`;
+  const currency = bd.currency;
+  const lineRows = bd.rows
+    .filter(r => r.kind !== 'total' && r.kind !== 'perPax')
+    .map(r => {
+      const signedAmt = r.amount < 0
+        ? `<span style="color:#c0392b">− ${formatMoney(Math.abs(r.amount), currency)}</span>`
+        : `${formatMoney(r.amount, currency)}`;
+      const rowClass =
+        r.kind === 'subtotal' ? 'breakdown-row subtotal' :
+        (r.kind === 'foc' ? 'breakdown-row discount' : 'breakdown-row');
+      return `<tr class="${rowClass}">
+  <td>${escapeHtml(r.label)}</td>
+  <td class="bd-detail">${escapeHtml(r.detail)}</td>
+  <td class="bd-amt">${signedAmt}</td>
+</tr>`;
+    }).join('');
+
+  return `<table class="breakdown-table">
+    <tbody>
+      ${lineRows}
+      <tr class="breakdown-row total">
+        <td colspan="2" style="text-align:right">Grand total</td>
+        <td class="bd-amt">${formatMoney(bd.grandTotal, currency)}</td>
+      </tr>
+      <tr class="breakdown-row per-pax">
+        <td colspan="2" style="text-align:right">÷ ${bd.totalPax} pax</td>
+        <td class="bd-amt">${formatPerPax(bd.perPax, currency)}</td>
+      </tr>
+    </tbody>
+  </table>`;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -887,7 +1433,6 @@ function generateOutput() {
   const briefRows = state.step3.briefRows;
   const hasBrief  = briefRows.length > 0;
 
-  // Refresh stays for latest data
   if (hasBrief) recomputeStaysPreserve();
 
   const notes      = hasBrief ? generateNotes(state, briefRows) : [];
@@ -919,7 +1464,6 @@ function generateOutput() {
     ${hasBrief ? generateBriefTable(briefRows) : `<p style="color:#bbb;font-style:italic">Add itinerary days in Step 3 to see brief table...</p>`}
   </div>`;
 
-  // Enhance state passed to details so accommodation names can resolve
   const detailState = { ...state, _hotelsByStars: getHotels() };
   html += `<div class="doc-section">
     <div class="doc-section-title">ITINERARY DETAILS</div>

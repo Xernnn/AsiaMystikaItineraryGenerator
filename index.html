@@ -43,19 +43,23 @@
         <div class="step-body">
           <div class="field-group">
             <label>Tên tour</label>
-            <input type="text" id="tourTitle" placeholder="Best of Vietnam – 10D9N Vietnam (Hanoi, Halong, Danang…)" />
+            <input type="text" id="tourTitle" />
+            <div id="destinationBar" class="destination-bar" data-destination-bar>
+              <span class="destination-bar-label">Destinations (auto-detected):</span>
+              <span class="destination-bar-chips" data-destination-chips>
+                <span class="destination-empty">Set the itinerary in Step 3 to see the detected cities here.</span>
+              </span>
+            </div>
           </div>
 
           <div class="field-row">
             <div class="field-group">
-              <label>Ngày đi (From)</label>
-              <input type="date" id="dateFrom" />
-              <div class="date-preview" id="dateFromPreview">—</div>
+              <label>Ngày đi — DD/MM/YYYY</label>
+              <input type="text" id="dateFrom" class="dd-mm-yyyy" data-date-text inputmode="numeric" maxlength="10" autocomplete="off" />
             </div>
             <div class="field-group">
-              <label>Ngày về (To)</label>
-              <input type="date" id="dateTo" />
-              <div class="date-preview" id="dateToPreview">—</div>
+              <label>Ngày về — DD/MM/YYYY</label>
+              <input type="text" id="dateTo" class="dd-mm-yyyy" data-date-text inputmode="numeric" maxlength="10" autocomplete="off" />
             </div>
           </div>
 
@@ -71,7 +75,7 @@
           </div>
           <div class="field-group" id="childAgesGroup" style="display:none">
             <label>Tuổi trẻ em (cách nhau bằng dấu phẩy)</label>
-            <input type="text" id="childAges" placeholder="9, 8, 4, 4, 3, 1.5" />
+            <input type="text" id="childAges" />
             <div class="helper-text">Chỉ trẻ em > 5 tuổi được tính vào pax để chọn loại xe.</div>
           </div>
 
@@ -106,6 +110,13 @@
           <span class="step-status" data-step-status="2"></span>
         </div>
         <div class="step-body">
+          <div class="destination-bar" data-destination-bar>
+            <span class="destination-bar-label">Destinations in this tour:</span>
+            <span class="destination-bar-chips" data-destination-chips>
+              <span class="destination-empty">Fill the itinerary in Step 3 to enable destination-specific options.</span>
+            </span>
+          </div>
+
           <div class="field-row">
             <div class="field-group">
               <label>Loại xe (primary)</label>
@@ -124,37 +135,56 @@
           </div>
 
           <div class="zone-picker" id="sapaZoneGroup" style="display:none">
-            <div class="zone-label">🚌 Sapa zone (limited to 16 &amp; 29 seater)</div>
-            <select id="sapaZoneCar">
-              <option value="16s">16-seater</option>
-              <option value="29s">29-seater</option>
-              <option value="split">Split: 1 × 29-seater + 1 × 16-seater</option>
-            </select>
+            <div class="zone-label">🚌 Sapa zone — chỉ được dùng xe 16 &amp; 29 chỗ</div>
+            <div class="zone-fleet-row">
+              <div class="zone-field">
+                <label>× 29-seater</label>
+                <input type="number" id="sapaN29" min="0" value="0" />
+              </div>
+              <div class="zone-field">
+                <label>× 16-seater</label>
+                <input type="number" id="sapaN16" min="0" value="0" />
+              </div>
+              <div class="zone-capacity" id="sapaZoneCapacity">Capacity: 0</div>
+              <button type="button" class="btn-secondary-sm" id="sapaZoneSuggestBtn">Suggest minimum</button>
+            </div>
           </div>
 
           <div class="zone-picker" id="pqRachVemGroup" style="display:none">
-            <div class="zone-label">🏝 Phu Quoc — Rach Vem zone (limited to 16 &amp; 29 seater)</div>
-            <select id="pqRachVemCar">
-              <option value="16s">16-seater</option>
-              <option value="29s">29-seater</option>
-              <option value="split">Split: 1 × 29-seater + 1 × 16-seater</option>
-            </select>
+            <div class="zone-label">🏝 Phu Quoc — Rach Vem zone — chỉ được dùng xe 16 &amp; 29 chỗ</div>
+            <div class="zone-fleet-row">
+              <div class="zone-field">
+                <label>× 29-seater</label>
+                <input type="number" id="pqN29" min="0" value="0" />
+              </div>
+              <div class="zone-field">
+                <label>× 16-seater</label>
+                <input type="number" id="pqN16" min="0" value="0" />
+              </div>
+              <div class="zone-capacity" id="pqZoneCapacity">Capacity: 0</div>
+              <button type="button" class="btn-secondary-sm" id="pqZoneSuggestBtn">Suggest minimum</button>
+            </div>
           </div>
 
-          <div class="field-row">
-            <div class="field-group">
-              <label>Shuttle Bus to Halong</label>
+          <div class="field-row" id="destOptionsRow">
+            <div class="field-group dest-option" id="optShuttleHalong" style="display:none">
+              <label>🚌 Shuttle Bus to Halong</label>
               <select id="shuttleHalong">
                 <option value="no">No</option>
                 <option value="yes">Yes</option>
               </select>
+              <div class="helper-text">Unlocked because the itinerary visits Halong.</div>
             </div>
-            <div class="field-group">
-              <label>Limousine to Sapa</label>
+            <div class="field-group dest-option" id="optLimoSapa" style="display:none">
+              <label>🚙 Limousine to Sapa</label>
               <select id="limoSapa">
                 <option value="no">No</option>
                 <option value="yes">Yes</option>
               </select>
+              <div class="helper-text">Unlocked because the itinerary visits Sapa.</div>
+            </div>
+            <div class="field-group dest-option-empty" id="optEmptyHint">
+              <div class="helper-text">No destination-specific options for this itinerary yet.</div>
             </div>
           </div>
 
@@ -205,12 +235,12 @@
               </div>
               <div class="field-group" style="flex:2">
                 <label>Template name (key)</label>
-                <input type="text" id="ntKey" placeholder="e.g. Hanoi – Old Quarter Walk" />
+                <input type="text" id="ntKey" />
               </div>
             </div>
             <div class="field-group">
               <label>Detail text (activity schedule)</label>
-              <textarea id="ntText" rows="5" placeholder="08:00 – After breakfast at hotel…"></textarea>
+              <textarea id="ntText" rows="5"></textarea>
             </div>
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
               <button class="btn-secondary" id="ntCancelBtn">Cancel</button>
@@ -316,11 +346,11 @@
               </div>
               <div class="field-group">
                 <label>Template Name (Key)</label>
-                <input type="text" id="tmKey" placeholder="e.g. Danang – Bana Hills – Danang" />
+                <input type="text" id="tmKey" />
               </div>
               <div class="field-group">
                 <label>Detail Text</label>
-                <textarea id="tmText" rows="12" placeholder="08:00: After breakfast..."></textarea>
+                <textarea id="tmText" rows="12"></textarea>
               </div>
             </div>
             <div class="modal-footer">
@@ -356,7 +386,7 @@
               <div class="field-row">
                 <div class="field-group">
                   <label>Hotel Name</label>
-                  <input type="text" id="hmName" placeholder="Grand Hotel Hanoi" />
+                  <input type="text" id="hmName" />
                 </div>
                 <div class="field-group">
                   <label>Star Rating</label>
@@ -374,10 +404,6 @@
 
               <div class="field-row">
                 <div class="field-group">
-                  <label>Room Type</label>
-                  <input type="text" id="hmRoomType" placeholder="Deluxe City View" />
-                </div>
-                <div class="field-group">
                   <label>Currency</label>
                   <select id="hmCurrency">
                     <option value="USD">USD</option>
@@ -391,79 +417,55 @@
                     <option value="false">Excluded (CHƯA VAT)</option>
                   </select>
                 </div>
-              </div>
-
-              <div class="rate-matrix">
-                <div class="rate-matrix-label">Room rate matrix (per room / night)</div>
-                <div class="rate-matrix-grid">
-                  <div></div>
-                  <div class="rmh">Low season</div>
-                  <div class="rmh">High season</div>
-                  <div class="rmh">FIT</div>
-                  <div><input type="number" id="hmFitLow" step="0.01" placeholder="32" /></div>
-                  <div><input type="number" id="hmFitHigh" step="0.01" placeholder="35" /></div>
-                  <div class="rmh">GIT</div>
-                  <div><input type="number" id="hmGitLow" step="0.01" placeholder="28" /></div>
-                  <div><input type="number" id="hmGitHigh" step="0.01" placeholder="31" /></div>
-                </div>
-              </div>
-
-              <div class="field-row">
                 <div class="field-group">
-                  <label>Extra Bed / night</label>
-                  <input type="number" id="hmExtraBed" step="0.01" placeholder="15" />
-                </div>
-                <div class="field-group">
-                  <label>Share Bed / night</label>
-                  <input type="number" id="hmShareBed" step="0.01" placeholder="3" />
-                </div>
-                <div class="field-group">
-                  <label>Early check-in (override)</label>
-                  <input type="number" id="hmEci" step="0.01" placeholder="(blank → 50% of rate)" />
-                </div>
-              </div>
-
-              <div class="field-row">
-                <div class="field-group">
-                  <label>Upgrade room name</label>
-                  <input type="text" id="hmUpgradeRoom" placeholder="Deluxe Mountain View" />
-                </div>
-                <div class="field-group">
-                  <label>Upgrade rate / night</label>
-                  <input type="number" id="hmUpgradeRate" step="0.01" placeholder="40" />
+                  <label>Early check-in override / room</label>
+                  <input type="number" id="hmEci" step="0.01" />
+                  <div class="helper-text">Leave blank to use 50% of the room rate.</div>
                 </div>
               </div>
 
               <div class="field-row">
                 <div class="field-group">
                   <label>FOC rule — every N rooms</label>
-                  <input type="number" id="hmFocEvery" min="1" placeholder="20" />
+                  <input type="number" id="hmFocEvery" min="1" />
                 </div>
                 <div class="field-group">
                   <label>FOC rule — free rooms</label>
-                  <input type="number" id="hmFocFree" min="0" placeholder="1" />
+                  <input type="number" id="hmFocFree" min="0" />
+                </div>
+                <div class="field-group">
+                  <label>High-season ranges <code>MM-DD..MM-DD</code></label>
+                  <input type="text" id="hmHighSeason" />
+                  <div class="helper-text">Comma-separated. Used to flip between Low and High rate per stay date.</div>
                 </div>
               </div>
 
               <div class="field-group">
-                <label>High-season ranges (format <code>MM-DD..MM-DD</code>, comma-separated)</label>
-                <input type="text" id="hmHighSeason" placeholder="06-01..08-31, 12-20..01-05" />
-                <div class="helper-text">Used to auto-switch rate between Low and High when a stay date falls inside any range.</div>
+                <label>Hotel URL</label>
+                <input type="url" id="hmUrl" />
               </div>
 
               <div class="field-group">
-                <label>Hotel URL (optional)</label>
-                <input type="url" id="hmUrl" placeholder="https://hotel.com" />
-              </div>
-              <div class="field-group">
-                <label>Notes / Flags</label>
+                <label>Hotel-level flags</label>
                 <div class="checkbox-row">
                   <label><input type="checkbox" id="hmFlagSkip" /> Skip (don't use)</label>
-                  <label><input type="checkbox" id="hmFlagNoEB" /> No Extra Bed</label>
+                  <label><input type="checkbox" id="hmFlagRed" /> 🚩 Red Flag (đánh giá xấu)</label>
                   <label><input type="checkbox" id="hmFlagDC" /> Day Cruise Only</label>
                   <label><input type="checkbox" id="hmFlagGIT" /> GIT Groups Only</label>
-                  <label><input type="checkbox" id="hmFlagPartial" /> Partial Price (?)</label>
+                  <label><input type="checkbox" id="hmFlagPartial" /> Partial Price</label>
                 </div>
+              </div>
+
+              <hr class="admin-divider" />
+
+              <!-- Room types repeater -->
+              <div class="room-types-section">
+                <div class="room-types-header">
+                  <h3 style="margin:0">🛏 Room Types</h3>
+                  <button type="button" class="btn-secondary-sm" id="hmAddRoomTypeBtn">+ Add room type</button>
+                </div>
+                <div class="helper-text">Thêm từng hạng phòng của khách sạn. Mỗi hạng có giá/extra bed/cờ riêng. Hạng đầu tiên sẽ là mặc định cho booking.</div>
+                <div id="hmRoomTypesList" class="room-types-list"></div>
               </div>
             </div>
             <div class="modal-footer">
@@ -476,6 +478,107 @@
     </div>
   </div>
 </main>
+
+<!-- ═══════════════════════════════════ STAY EDIT MODAL ═══ -->
+<div id="stayEditModal" class="modal" style="display:none">
+  <div class="modal-box modal-box-wide">
+    <div class="modal-header">
+      <span id="stayModalTitle">Edit stay</span>
+      <button class="modal-close" data-close="stayEditModal">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- 1. Hotel & room -->
+      <section class="stay-edit-section">
+        <h3 class="stay-edit-section-title">1. Hotel &amp; room</h3>
+        <div class="field-row">
+          <div class="field-group" style="flex:2">
+            <label>Hotel</label>
+            <select id="smHotel"></select>
+            <div id="smHotelFlags" class="stay-edit-flags"></div>
+          </div>
+          <div class="field-group">
+            <label>Star tier</label>
+            <div class="toggle-pill" id="smStarToggle">
+              <button type="button" class="pill-opt" data-star="3">3★</button>
+              <button type="button" class="pill-opt active" data-star="4">4★</button>
+              <button type="button" class="pill-opt" data-star="5">5★</button>
+            </div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group" style="flex:2">
+            <label>Room type (default for this booking)</label>
+            <select id="smRoomType"></select>
+            <div id="smRoomTypeFlags" class="stay-edit-flags"></div>
+          </div>
+          <div class="field-group" style="flex:2">
+            <label>Upgrade to (optional)</label>
+            <select id="smUpgradeRt"></select>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Rooms & beds -->
+      <section class="stay-edit-section">
+        <h3 class="stay-edit-section-title">2. Rooms &amp; beds</h3>
+        <div class="field-row">
+          <div class="field-group"><label>2-pax rooms</label><input type="number" id="smR2" min="0" value="0" /></div>
+          <div class="field-group"><label>3-pax rooms</label><input type="number" id="smR3" min="0" value="0" /></div>
+          <div class="field-group"><label>Extra beds</label><input type="number" id="smEb" min="0" value="0" /></div>
+          <div class="field-group"><label>Share beds</label><input type="number" id="smSb" min="0" value="0" /></div>
+        </div>
+        <div id="smEbWarn" class="helper-text" style="color:#c0392b;display:none">🚫 This room type does NOT allow extra beds.</div>
+      </section>
+
+      <!-- 3. Surcharges -->
+      <section class="stay-edit-section">
+        <h3 class="stay-edit-section-title">3. Surcharges</h3>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Early check-in day</label>
+            <select id="smEci"></select>
+            <div class="helper-text">Adds 50% of room rate × paid rooms (or hotel override).</div>
+          </div>
+          <div class="field-group" id="smFlexBlock" style="display:none">
+            <label>Flexible price override (per room / night)</label>
+            <input type="number" id="smPriceOverride" min="0" step="0.01" />
+            <div class="helper-text">Used only for this booking. Leave blank for the contract rate.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. FOC -->
+      <section class="stay-edit-section">
+        <h3 class="stay-edit-section-title">4. Free-of-charge (FOC) rooms</h3>
+        <div class="field-row">
+          <div class="field-group">
+            <label>FOC rooms</label>
+            <input type="number" id="smFoc" min="0" value="0" />
+          </div>
+          <div class="field-group">
+            <label>&nbsp;</label>
+            <button type="button" class="btn-secondary-sm" id="smSuggestFocBtn">✨ Suggest FOC (from hotel contract)</button>
+            <div class="helper-text" id="smFocHelper"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Price breakdown -->
+      <section class="stay-edit-section">
+        <h3 class="stay-edit-section-title">5. Price breakdown (live)</h3>
+        <div id="smBreakdown" class="breakdown-table-wrap">
+          <div class="helper-text">Fill the form above to see the breakdown.</div>
+        </div>
+      </section>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" data-close="stayEditModal">Cancel</button>
+      <button class="btn-primary" id="smSaveBtn">💾 Save &amp; close</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast"></div>
 

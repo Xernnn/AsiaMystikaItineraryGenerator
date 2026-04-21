@@ -294,15 +294,16 @@ body {
   border: 1px solid var(--primary);
   color: var(--primary);
   border-radius: 12px;
-  padding: 2px 8px;
+  padding: 2px 10px;
   font-size: 10.5px;
   font-weight: 600;
   cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
-  transition: background .15s;
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.35;
+  max-width: 100%;
+  transition: background .15s, color .15s;
 }
 .tmpl-rec-btn:hover { background: var(--primary); color: #fff; }
 .tmpl-new-btn {
@@ -1019,3 +1020,547 @@ textarea { resize: vertical; }
 ::-webkit-scrollbar-track { background: #f1f3f4; border-radius: 4px; }
 ::-webkit-scrollbar-thumb { background: #bdc1c6; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #80868b; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   New component styles (zone fleet, room types, flexible price, etc.)
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Transport zone fleet (Sapa / Phu Quoc Rach Vem) ── */
+.zone-fleet-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+.zone-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 130px;
+}
+.zone-field label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.zone-field input[type="number"] {
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.zone-capacity {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  background: #fff;
+  border: 1px solid #c9def7;
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+.zone-capacity.short { color: var(--danger); border-color: #f5c2bd; background: #fce8e6; }
+.zone-capacity.ok    { color: var(--success); border-color: #bfe5c8; background: #e6f4ea; }
+
+.btn-secondary-sm {
+  background: transparent;
+  color: var(--primary);
+  border: 1px dashed var(--primary);
+  padding: 5px 11px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background .15s, color .15s;
+}
+.btn-secondary-sm:hover { background: var(--primary); color: #fff; }
+
+/* ── DD/MM/YYYY text date inputs ── */
+input.dd-mm-yyyy,
+input[data-date-text] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .5px;
+}
+input[data-date-text].invalid {
+  border-color: var(--danger);
+  background: #fce8e6;
+}
+
+/* ── Admin: Room types repeater ── */
+.room-types-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 14px 16px;
+  margin-top: 8px;
+  margin-bottom: 14px;
+}
+.room-types-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.room-types-header strong {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.room-types-list { display: flex; flex-direction: column; gap: 10px; }
+
+.rt-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px 14px;
+}
+.rt-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+.rt-row-head strong {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.btn-remove-rt {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--danger);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background .15s, border-color .15s;
+}
+.btn-remove-rt:hover { background: #fce8e6; border-color: var(--danger); }
+
+/* Compact the inner rate-matrix inside each rt-row */
+.rt-row .rate-matrix { margin-bottom: 10px; padding: 8px 10px; }
+.rt-row .field-row,
+.rt-row .field-group { margin-bottom: 10px; }
+.rt-row .field-group:last-child { margin-bottom: 0; }
+
+/* ── Admin: inline room-type summary on hotel list ── */
+.item-card-rooms {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rt-line {
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.rt-line .rt-line-name { font-weight: 700; color: var(--primary); }
+.rt-line .rt-line-meta { color: var(--text-muted); font-size: 11px; }
+
+/* Flag badge variants */
+.flag-badge.flag-flex {
+  background: #e8f0fe;
+  color: var(--primary);
+}
+.flag-badge.flag-redFlag {
+  background: #fce8e6;
+  color: var(--danger);
+}
+
+/* ── Step 4: room type + upgrade row ── */
+.stay-roomtype-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.stay-roomtype-row .mini-field { display: flex; flex-direction: column; gap: 3px; }
+.stay-roomtype-row .mini-field label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.stay-roomtype-row select { padding: 7px 10px; font-size: 13px; }
+
+/* Flexible-price override input */
+.stay-rooms-row .mini-field .stay-price-override {
+  border: 1px solid #e8b86a;
+  background: #fffaf0;
+}
+.stay-rooms-row .mini-field .stay-price-override:focus {
+  border-color: #d98e04;
+  box-shadow: 0 0 0 3px rgba(217,142,4,.18);
+}
+
+/* Inline warnings under the stay block */
+.stay-warning {
+  margin-top: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.stay-warning.warn     { background: #fff8e1; color: #856404; border: 1px solid #ffeeba; }
+.stay-warning.red-flag { background: #fce8e6; color: var(--danger); border: 1px solid #f5c2bd; }
+
+/* ── Preview accommodation: override + red flag badges ── */
+.accom-override {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 4px;
+  background: #fffaf0;
+  color: #d98e04;
+  border: 1px solid #e8b86a;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.accom-redflag {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 13px;
+}
+.accom-header {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.accom-stay-tier {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--primary-light);
+  padding: 2px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+/* Suggestion chips inside the brief grid — compact but always readable. */
+.brief-grid .cell-itinerary .tmpl-rec {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #f4f8ff;
+  border: 1px dashed #c9d8f4;
+  border-radius: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.tmpl-rec-btn.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(26,115,232,.2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Destination tag bar (Step 1 + Step 2) — auto-detected from Step 3
+   ══════════════════════════════════════════════════════════════════════ */
+
+.destination-bar {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f8fafd;
+  border: 1px dashed #c8d3e4;
+  border-radius: var(--radius);
+}
+.destination-bar-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.destination-bar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+}
+.destination-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.destination-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  border: 1px solid transparent;
+}
+.destination-chip.dest-generic  { background: #eef1f6; color: #475062; border-color: #d6dbe4; }
+.destination-chip.dest-hanoi    { background: #fdecec; color: #b9354a; border-color: #f4c2c9; }
+.destination-chip.dest-hcm      { background: #fff4e1; color: #a96400; border-color: #f4d89a; }
+.destination-chip.dest-halong   { background: #dff3fa; color: #0a657c; border-color: #9fdbea; }
+.destination-chip.dest-sapa     { background: #e9fce5; color: #266b27; border-color: #a4dba0; }
+.destination-chip.dest-pq       { background: #fff0f6; color: #a8287b; border-color: #f3bbd6; }
+.destination-chip.dest-danang   { background: #fff6e8; color: #9a6a10; border-color: #f0d598; }
+.destination-chip.dest-hoian    { background: #fff7d6; color: #866c12; border-color: #ecd888; }
+
+/* Destination-conditional options in Step 2 */
+.dest-option-empty { flex: 1; }
+.dest-option-empty .helper-text { font-style: italic; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Step 4 — Stay summary card + Edit-stay modal + Breakdown table
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Summary card per stay */
+.stay-summary-card { padding: 14px 16px; }
+
+/* Heading row — city + days on the left, 3/4/5★ toggle centered, Edit button on the right. */
+.stay-summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.stay-summary-heading-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.25;
+}
+.stay-summary-heading-text .stay-heading-nights {
+  font-weight: 500;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-left: 6px;
+}
+.stay-star-toggle-inline {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.stay-star-toggle-inline .star-opt {
+  min-width: 38px;
+  padding: 5px 10px;
+  text-align: center;
+}
+.stay-summary-heading .stay-edit-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Body row — now gets the full width (hotel info : quote split). */
+.stay-summary-body {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 14px;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .stay-summary-body { grid-template-columns: 1fr; }
+}
+
+.stay-summary-hotel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.stay-summary-hotel-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stay-summary-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.stay-summary-warn {
+  font-size: 11.5px;
+  color: var(--danger);
+  font-weight: 600;
+}
+.stay-summary-empty {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-muted);
+  padding: 12px;
+  background: #fff8e1;
+  border: 1px dashed #ffd86b;
+  border-radius: var(--radius);
+}
+
+.stay-summary-quote {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stay-summary-rooms { font-size: 12.5px; color: var(--text); font-weight: 600; }
+.stay-summary-extras { font-size: 11.5px; color: #856404; }
+.stay-summary-perpax {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+.stay-summary-perpax-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.stay-summary-perpax-value {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--success);
+}
+.stay-summary-grand {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Grand accommodation total */
+.accom-grand-total {
+  margin-top: 14px;
+  padding: 14px 18px;
+  background: linear-gradient(90deg, #e6f4ea, #e8f0fe);
+  border: 1px solid #bfe5c8;
+  border-radius: var(--radius);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.accom-grand-total.mixed {
+  background: #fff8e1;
+  border-color: #ffd86b;
+}
+.accom-grand-total-label {
+  font-size: 11.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-muted);
+}
+.accom-grand-total-value {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--success);
+}
+
+/* ── Step 4 — Stay edit modal ── */
+#stayEditModal .modal-box-wide { max-width: 860px; }
+.stay-edit-section {
+  border-top: 1px dashed var(--border);
+  padding: 14px 0;
+}
+.stay-edit-section:first-of-type { border-top: none; padding-top: 0; }
+.stay-edit-section-title {
+  margin: 0 0 10px 0;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.stay-edit-flags {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── Breakdown table (modal + preview) ── */
+.breakdown-table-wrap { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; }
+.breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.breakdown-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.breakdown-table tr:last-child td { border-bottom: none; }
+.breakdown-row .bd-detail { color: var(--text-muted); font-size: 11.5px; }
+.breakdown-row .bd-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.breakdown-row.subtotal td {
+  background: #f5f9ff;
+  font-weight: 700;
+}
+.breakdown-row.discount .bd-amt { color: var(--danger); }
+.breakdown-row.total td {
+  background: #e8f0fe;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--text);
+}
+.breakdown-row.per-pax td {
+  background: #e6f4ea;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--success);
+}
+
+/* Preview accommodation: subtotal/grand-total rows keep the same palette */
+.accom-table .subtotal-row td { background: #f5f9ff; font-weight: 700; }
+.accom-table .grand-total-row td { background: #e8f0fe; }
+.accom-table .per-pax-row td { background: #e6f4ea; }
+
+/* ── Upstream stale banner ── */
+.step-stale-banner {
+  background: #fff8e1;
+  color: #856404;
+  border: 1px solid #ffd86b;
+  border-left: 4px solid #e8a33d;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}

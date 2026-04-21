@@ -1,32 +1,40 @@
 /**
  * hotels.js — Asia Mystika Itinerary Generator
  *
- * NEW SCHEMA (v2) — redesigned per Hiếu's requirements:
+ * SCHEMA (v3) — a hotel owns a list of room types, each with its own
+ * rates, extra-bed policy, flexible-price flag, and flags.
  *
  *   {
- *     id:               string,                   // slug
+ *     id:               string,
  *     name:             string,
- *     city:             "HN" | "NB" | "SP" | "HL" | "DN" | "HA" | "HC" | "PQ",
+ *     city:             "HN"|"NB"|"SP"|"HL"|"DN"|"HA"|"HC"|"PQ",
  *     starRating:       3 | 4 | 5,
- *     roomType:         string,                   // "Deluxe City View"
  *     currency:         "USD" | "VND",
- *     rates: {
- *       fit: { low: number, high: number },       // per room per night, for groups booking few rooms
- *       git: { low: number, high: number },       // per room per night, for groups booking many rooms
- *     },
- *     extraBed:         number | null,            // per night
- *     shareBed:         number | null,            // per night (child share bed with parents)
- *     earlyCheckinRate: number | null,            // per room, per incident. If null, fallback = 50% × current room rate.
- *     upgrade:          { roomType: string, ratePerNight: number } | null,
- *     focRule:          { everyRooms: number, freeRooms: number } | null,
  *     vatIncluded:      boolean,
- *     highSeason:       Array<{ from: "MM-DD", to: "MM-DD" }>,   // inclusive ranges; may wrap year-end
- *     url:              string | "",
- *     flags:            Array<"skip"|"noExtraBed"|"dayCruiseOnly"|"gitOnly"|"partialPrice">,
- *   }
+ *     url:              string,
  *
- * Only 3 real seed hotels below — rest will be populated via the Admin tab.
- * The old V1 data has been moved to data/hotels.legacy.js for reference only.
+ *     earlyCheckinRate: number | null,   // override rate / room; null → 50% of room rate
+ *     focRule:          { everyRooms, freeRooms } | null,
+ *     highSeason:       Array<{ from: "MM-DD", to: "MM-DD" }>,
+ *     flags:            Array<"skip"|"redFlag"|"dayCruiseOnly"|"gitOnly"|"partialPrice">,
+ *
+ *     roomTypes: [
+ *       {
+ *         id:             string,
+ *         name:           string,             // "Deluxe City View"
+ *         rates: {
+ *           fit: { low, high },
+ *           git: { low, high },
+ *         },
+ *         extraBedAllowed: boolean,           // false → room type cannot accept EB
+ *         extraBedRate:    number | null,     // per night (ignored if extraBedAllowed = false)
+ *         shareBed:        number | null,     // per night
+ *         flexiblePrice:   boolean,           // allow per-booking price override in Step 4
+ *         flags:           Array<"redFlag">,
+ *         notes:           string,
+ *       }
+ *     ]
+ *   }
  */
 
 export const hotelsByStars = {
@@ -37,48 +45,78 @@ export const hotelsByStars = {
       name: "First Eden Hotel",
       city: "HN",
       starRating: 4,
-      roomType: "Deluxe City View",
       currency: "USD",
-      rates: {
-        fit: { low: 32, high: 35 },
-        git: { low: 28, high: 31 },
-      },
-      extraBed: 15,
-      shareBed: 3,
-      earlyCheckinRate: null,
-      upgrade: null,
-      focRule: { everyRooms: 15, freeRooms: 1 },
       vatIncluded: true,
+      url: "http://firstedenhotel.com.vn/Default.aspx",
+      earlyCheckinRate: null,
+      focRule: { everyRooms: 15, freeRooms: 1 },
       highSeason: [
         { from: "01-01", to: "04-30" },
         { from: "10-01", to: "12-31" },
       ],
-      url: "http://firstedenhotel.com.vn/Default.aspx",
       flags: [],
+      roomTypes: [
+        {
+          id: "first-eden-hanoi__deluxe-city-view",
+          name: "Deluxe City View",
+          rates: {
+            fit: { low: 32, high: 35 },
+            git: { low: 28, high: 31 },
+          },
+          extraBedAllowed: true,
+          extraBedRate: 15,
+          shareBed: 3,
+          flexiblePrice: false,
+          flags: [],
+          notes: "",
+        },
+      ],
     },
     {
       id: "the-view-sapa",
       name: "The View Sapa Hotel",
       city: "SP",
       starRating: 4,
-      roomType: "Superior Garden View",
       currency: "VND",
-      rates: {
-        fit: { low: 864000, high: 1026000 },
-        git: { low: 790000, high: 940000 },
-      },
-      extraBed: 250000,
-      shareBed: 200000,
-      earlyCheckinRate: null,
-      upgrade: { roomType: "Deluxe Mountain View", ratePerNight: 216000 },
-      focRule: { everyRooms: 20, freeRooms: 1 },
       vatIncluded: true,
+      url: "http://theviewsapahotel.com/en",
+      earlyCheckinRate: null,
+      focRule: { everyRooms: 20, freeRooms: 1 },
       highSeason: [
         { from: "06-01", to: "08-31" },
         { from: "12-20", to: "01-05" },
       ],
-      url: "http://theviewsapahotel.com/en",
       flags: [],
+      roomTypes: [
+        {
+          id: "the-view-sapa__superior-garden",
+          name: "Superior Garden View",
+          rates: {
+            fit: { low: 864000, high: 1026000 },
+            git: { low: 790000, high: 940000 },
+          },
+          extraBedAllowed: true,
+          extraBedRate: 250000,
+          shareBed: 200000,
+          flexiblePrice: false,
+          flags: [],
+          notes: "",
+        },
+        {
+          id: "the-view-sapa__deluxe-mountain",
+          name: "Deluxe Mountain View",
+          rates: {
+            fit: { low: 1080000, high: 1242000 },
+            git: { low: 1006000, high: 1156000 },
+          },
+          extraBedAllowed: true,
+          extraBedRate: 250000,
+          shareBed: 200000,
+          flexiblePrice: false,
+          flags: [],
+          notes: "",
+        },
+      ],
     },
   ],
   "5": [
@@ -87,29 +125,129 @@ export const hotelsByStars = {
       name: "Da Nang Marriott Resort & Spa",
       city: "DN",
       starRating: 5,
-      roomType: "Deluxe Ocean View",
       currency: "USD",
-      rates: {
-        fit: { low: 185, high: 245 },
-        git: { low: 165, high: 215 },
-      },
-      extraBed: 45,
-      shareBed: 0,
-      earlyCheckinRate: null,
-      upgrade: { roomType: "Junior Suite Ocean View", ratePerNight: 60 },
-      focRule: { everyRooms: 20, freeRooms: 1 },
       vatIncluded: false,
+      url: "",
+      earlyCheckinRate: null,
+      focRule: { everyRooms: 20, freeRooms: 1 },
       highSeason: [
         { from: "06-01", to: "08-31" },
       ],
-      url: "",
       flags: [],
+      roomTypes: [
+        {
+          id: "danang-marriott__deluxe-ocean",
+          name: "Deluxe Ocean View",
+          rates: {
+            fit: { low: 185, high: 245 },
+            git: { low: 165, high: 215 },
+          },
+          extraBedAllowed: true,
+          extraBedRate: 45,
+          shareBed: 0,
+          flexiblePrice: false,
+          flags: [],
+          notes: "",
+        },
+        {
+          id: "danang-marriott__junior-suite",
+          name: "Junior Suite Ocean View",
+          rates: {
+            fit: { low: 245, high: 305 },
+            git: { low: 225, high: 275 },
+          },
+          extraBedAllowed: true,
+          extraBedRate: 45,
+          shareBed: 0,
+          flexiblePrice: true,
+          flags: [],
+          notes: "Flexible rate — sale managers may override for special promotions.",
+        },
+      ],
     },
   ],
 };
 
-/**
- * City codes used in the new schema.
- * Note: DN and HA are separate (previously merged as "DN").
- */
 export const HOTEL_CITY_CODES = ["HN", "NB", "SP", "HL", "DN", "HA", "HC", "PQ"];
+
+/**
+ * Migrate a v2 hotels-by-stars object to v3 (roomTypes array). Safe to call
+ * on already-v3 data.
+ */
+export function migrateHotelsToV3(byStars) {
+  const out = {};
+  for (const [tier, arr] of Object.entries(byStars || {})) {
+    out[tier] = (arr || []).map(h => migrateHotelV3(h));
+  }
+  return out;
+}
+
+function migrateHotelV3(h) {
+  if (h && Array.isArray(h.roomTypes)) return h; // already v3
+
+  const base = {
+    id: h.id,
+    name: h.name,
+    city: h.city,
+    starRating: h.starRating,
+    currency: h.currency || "USD",
+    vatIncluded: !!h.vatIncluded,
+    url: h.url || "",
+    earlyCheckinRate: h.earlyCheckinRate ?? null,
+    focRule: h.focRule || null,
+    highSeason: h.highSeason || [],
+    flags: (h.flags || []).filter(f => f !== "noExtraBed"),
+  };
+
+  const noEB = (h.flags || []).includes("noExtraBed");
+  const rt0 = {
+    id: `${h.id}__${slugify(h.roomType || "standard")}`,
+    name: h.roomType || "Standard",
+    rates: {
+      fit: {
+        low: h.rates?.fit?.low ?? 0,
+        high: h.rates?.fit?.high ?? 0,
+      },
+      git: {
+        low: h.rates?.git?.low ?? 0,
+        high: h.rates?.git?.high ?? 0,
+      },
+    },
+    extraBedAllowed: !noEB && (h.extraBed != null),
+    extraBedRate: h.extraBed ?? null,
+    shareBed: h.shareBed ?? null,
+    flexiblePrice: false,
+    flags: [],
+    notes: "",
+  };
+
+  const roomTypes = [rt0];
+
+  if (h.upgrade && h.upgrade.roomType) {
+    const up = h.upgrade;
+    const upRateFit = (Number(h.rates?.fit?.low || 0)) + Number(up.ratePerNight || 0);
+    const upRateFitH = (Number(h.rates?.fit?.high || 0)) + Number(up.ratePerNight || 0);
+    const upRateGit = (Number(h.rates?.git?.low || 0)) + Number(up.ratePerNight || 0);
+    const upRateGitH = (Number(h.rates?.git?.high || 0)) + Number(up.ratePerNight || 0);
+    roomTypes.push({
+      id: `${h.id}__${slugify(up.roomType)}`,
+      name: up.roomType,
+      rates: {
+        fit: { low: upRateFit,  high: upRateFitH },
+        git: { low: upRateGit,  high: upRateGitH },
+      },
+      extraBedAllowed: !noEB && (h.extraBed != null),
+      extraBedRate: h.extraBed ?? null,
+      shareBed: h.shareBed ?? null,
+      flexiblePrice: false,
+      flags: [],
+      notes: "",
+    });
+  }
+
+  return { ...base, roomTypes };
+}
+
+function slugify(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "room";
+}

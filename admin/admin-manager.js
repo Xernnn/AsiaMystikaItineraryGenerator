@@ -4,16 +4,16 @@
  * Admin tab: CRUD for templates and hotels.
  * Data is stored in localStorage and can be exported / imported as JSON.
  *
- * Hotel data now uses the V2 schema defined in [data/hotels.js](../data/hotels.js).
- * The localStorage key has been bumped to `am_hotels_v2` to avoid colliding with
- * the old V1 data.
+ * Hotels use the v3 schema (roomTypes array) defined in [data/hotels.js](../data/hotels.js).
+ * LocalStorage key bumped to `am_hotels_v3` — v2 data is automatically migrated on read.
  */
 
 import { templatesByCity, CITY_LABELS } from '../data/templates.js';
-import { hotelsByStars } from '../data/hotels.js';
+import { hotelsByStars, migrateHotelsToV3 } from '../data/hotels.js';
 
 const LS_TEMPLATES = 'am_templates_v1';
-const LS_HOTELS    = 'am_hotels_v2';
+const LS_HOTELS_V2 = 'am_hotels_v2';
+const LS_HOTELS    = 'am_hotels_v3';
 
 // ──────────────────────────────────────────────────────────────────────
 //  DATA ACCESS
@@ -32,8 +32,14 @@ export function saveTemplates(data) {
 
 export function getHotels() {
   try {
-    const saved = localStorage.getItem(LS_HOTELS);
-    if (saved) return JSON.parse(saved);
+    const savedV3 = localStorage.getItem(LS_HOTELS);
+    if (savedV3) return JSON.parse(savedV3);
+    const savedV2 = localStorage.getItem(LS_HOTELS_V2);
+    if (savedV2) {
+      const migrated = migrateHotelsToV3(JSON.parse(savedV2));
+      localStorage.setItem(LS_HOTELS, JSON.stringify(migrated));
+      return migrated;
+    }
   } catch {}
   return deepClone(hotelsByStars);
 }
@@ -42,7 +48,6 @@ export function saveHotels(data) {
   localStorage.setItem(LS_HOTELS, JSON.stringify(data));
 }
 
-/** Flat list: all hotels with their tier attached. */
 export function getAllHotelsFlat() {
   const byStars = getHotels();
   const list = [];
@@ -58,7 +63,7 @@ export function getAllHotelsFlat() {
 
 export function exportConfig() {
   const config = {
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     templates: getTemplates(),
     hotels: getHotels(),
@@ -79,7 +84,7 @@ export function importConfig(file) {
       try {
         const config = JSON.parse(e.target.result);
         if (config.templates) saveTemplates(config.templates);
-        if (config.hotels)    saveHotels(config.hotels);
+        if (config.hotels)    saveHotels(migrateHotelsToV3(config.hotels));
         resolve(config);
       } catch (err) { reject(err); }
     };
@@ -91,6 +96,7 @@ export function importConfig(file) {
 export function resetToDefaults() {
   localStorage.removeItem(LS_TEMPLATES);
   localStorage.removeItem(LS_HOTELS);
+  localStorage.removeItem(LS_HOTELS_V2);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -100,14 +106,14 @@ export function resetToDefaults() {
 export function addTemplate(city, key, text) {
   const templates = getTemplates();
   if (!templates[city]) templates[city] = [];
-  templates[city].push({ key: key.trim(), text: text.trim() });
+  templates[city].push({ key: key.trim(), text: (text || '').trim() });
   saveTemplates(templates);
 }
 
 export function updateTemplate(city, index, key, text) {
   const templates = getTemplates();
   if (!templates[city] || !templates[city][index]) return;
-  templates[city][index] = { key: key.trim(), text: text.trim() };
+  templates[city][index] = { key: key.trim(), text: (text || '').trim() };
   saveTemplates(templates);
 }
 
@@ -151,8 +157,7 @@ export function deleteHotel(tier, index) {
 export function initAdminUI(showToast) {
   const CITIES = Object.entries(CITY_LABELS);
 
-  // Populate city selects
-  ['tmCity', 'hmCity'].forEach(id => {
+  ['tmCity', 'hmCity', 'ntCity'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
     sel.innerHTML = CITIES.map(([code, label]) =>
@@ -160,7 +165,6 @@ export function initAdminUI(showToast) {
     ).join('');
   });
 
-  // Admin nav
   document.querySelectorAll('.admin-nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.admin-nav-btn').forEach(b => b.classList.remove('active'));
@@ -170,16 +174,13 @@ export function initAdminUI(showToast) {
     });
   });
 
-  // Export / Import / Reset
   document.getElementById('exportConfigBtn')?.addEventListener('click', () => {
     exportConfig();
     showToast('Config exported!', 'success');
   });
-
   document.getElementById('importConfigBtn')?.addEventListener('click', () => {
     document.getElementById('importFileInput')?.click();
   });
-
   document.getElementById('importFileInput')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -192,7 +193,6 @@ export function initAdminUI(showToast) {
     }
     e.target.value = '';
   });
-
   document.getElementById('resetConfigBtn')?.addEventListener('click', () => {
     if (!confirm('Reset all templates and hotels to defaults? This cannot be undone.')) return;
     resetToDefaults();
@@ -200,7 +200,6 @@ export function initAdminUI(showToast) {
     setTimeout(() => location.reload(), 1200);
   });
 
-  // Modal close
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.getElementById(btn.dataset.close)?.style.setProperty('display', 'none');
@@ -250,6 +249,11 @@ export function initAdminUI(showToast) {
     openHotelModal(null);
   });
 
+  // Add room type row
+  document.getElementById('hmAddRoomTypeBtn')?.addEventListener('click', () => {
+    appendRoomTypeRow({});
+  });
+
   document.getElementById('saveHotelBtn')?.addEventListener('click', () => {
     const tier = document.getElementById('hmStars').value;
     const name = document.getElementById('hmName').value.trim();
@@ -257,7 +261,7 @@ export function initAdminUI(showToast) {
 
     const flags = [];
     if (document.getElementById('hmFlagSkip').checked)    flags.push('skip');
-    if (document.getElementById('hmFlagNoEB').checked)    flags.push('noExtraBed');
+    if (document.getElementById('hmFlagRed').checked)     flags.push('redFlag');
     if (document.getElementById('hmFlagDC').checked)      flags.push('dayCruiseOnly');
     if (document.getElementById('hmFlagGIT').checked)     flags.push('gitOnly');
     if (document.getElementById('hmFlagPartial').checked) flags.push('partialPrice');
@@ -266,39 +270,30 @@ export function initAdminUI(showToast) {
       const v = document.getElementById(id).value.trim();
       return v === '' ? null : Number(v);
     };
-    const num = (id) => Number(document.getElementById(id).value || 0);
-
-    const highSeason = parseSeasonRanges(document.getElementById('hmHighSeason').value);
-
-    const upgradeRoom = document.getElementById('hmUpgradeRoom').value.trim();
-    const upgradeRate = numOrNull('hmUpgradeRate');
-    const upgrade = upgradeRoom && upgradeRate != null
-      ? { roomType: upgradeRoom, ratePerNight: upgradeRate }
-      : null;
 
     const focEvery = numOrNull('hmFocEvery');
     const focFree  = numOrNull('hmFocFree');
-    const focRule  = (focEvery && focFree) ? { everyRooms: focEvery, freeRooms: focFree } : null;
+    const focRule  = (focEvery && focFree != null) ? { everyRooms: focEvery, freeRooms: focFree } : null;
+    const highSeason = parseSeasonRanges(document.getElementById('hmHighSeason').value);
+
+    const roomTypes = collectRoomTypes(name);
+    if (!roomTypes.length) {
+      showToast('Add at least one room type.', 'error');
+      return;
+    }
 
     const hotelData = {
       name,
       city:        document.getElementById('hmCity').value,
       starRating:  Number(tier),
-      roomType:    document.getElementById('hmRoomType').value.trim(),
       currency:    document.getElementById('hmCurrency').value,
-      rates: {
-        fit: { low: num('hmFitLow'), high: num('hmFitHigh') },
-        git: { low: num('hmGitLow'), high: num('hmGitHigh') },
-      },
-      extraBed:         numOrNull('hmExtraBed'),
-      shareBed:         numOrNull('hmShareBed'),
-      earlyCheckinRate: numOrNull('hmEci'),
-      upgrade,
-      focRule,
       vatIncluded: document.getElementById('hmVat').value === 'true',
+      url:         document.getElementById('hmUrl').value.trim(),
+      earlyCheckinRate: numOrNull('hmEci'),
+      focRule,
       highSeason,
-      url:   document.getElementById('hmUrl').value.trim(),
       flags,
+      roomTypes,
     };
 
     const modal = document.getElementById('hotelModal');
@@ -438,13 +433,27 @@ function renderHotelList(filterStars) {
     if (filterStars !== 'all' && tier !== filterStars) continue;
     items.forEach((hotel, idx) => {
       const flagsHtml = (hotel.flags || []).map(f =>
-        `<span class="flag-badge">${f}</span>`
+        `<span class="flag-badge flag-${f}">${flagLabel(f)}</span>`
       ).join('');
       const cur = hotel.currency || 'USD';
-      const fitLo = formatAmount(hotel.rates?.fit?.low, cur);
-      const fitHi = formatAmount(hotel.rates?.fit?.high, cur);
-      const gitLo = formatAmount(hotel.rates?.git?.low, cur);
-      const gitHi = formatAmount(hotel.rates?.git?.high, cur);
+
+      const roomRowsHtml = (hotel.roomTypes || []).map(rt => {
+        const fitLo = formatAmount(rt.rates?.fit?.low,  cur);
+        const fitHi = formatAmount(rt.rates?.fit?.high, cur);
+        const gitLo = formatAmount(rt.rates?.git?.low,  cur);
+        const gitHi = formatAmount(rt.rates?.git?.high, cur);
+        const eb    = rt.extraBedAllowed ? (rt.extraBedRate != null ? formatAmount(rt.extraBedRate, cur) : '—') : '✖ no EB';
+        const sb    = rt.shareBed != null ? formatAmount(rt.shareBed, cur) : '—';
+        const flex  = rt.flexiblePrice ? ' <span class="flag-badge flag-flex">Flexible</span>' : '';
+        const red   = (rt.flags || []).includes('redFlag') ? ' <span class="flag-badge flag-redFlag">🚩</span>' : '';
+        return `<div class="rt-line">
+          <strong>${escHtml(rt.name)}</strong>${red}${flex}
+          <span>FIT ${fitLo} / ${fitHi}</span>
+          <span>GIT ${gitLo} / ${gitHi}</span>
+          <span>EB: ${eb}</span>
+          <span>SB: ${sb}</span>
+        </div>`;
+      }).join('') || '<em>No room types</em>';
 
       const card = document.createElement('div');
       card.className = 'item-card';
@@ -456,16 +465,11 @@ function renderHotelList(filterStars) {
             ${escHtml(hotel.name)}${flagsHtml}
           </div>
           <div class="item-card-meta" style="white-space:normal">
-            ${escHtml(hotel.roomType || '')}
-            &nbsp;|&nbsp; <strong>FIT</strong> low ${fitLo} / high ${fitHi}
-            &nbsp;|&nbsp; <strong>GIT</strong> low ${gitLo} / high ${gitHi}
-            &nbsp;|&nbsp; VAT: ${hotel.vatIncluded ? '✅' : '❌'}
-            ${hotel.extraBed != null ? ` | EB: ${formatAmount(hotel.extraBed, cur)}` : ''}
-            ${hotel.shareBed != null ? ` | SB: ${formatAmount(hotel.shareBed, cur)}` : ''}
+            VAT: ${hotel.vatIncluded ? '✅' : '❌'}
             ${hotel.focRule ? ` | FOC: ${hotel.focRule.everyRooms}→${hotel.focRule.freeRooms}` : ''}
+            ${hotel.highSeason?.length ? ` | HS: ${hotel.highSeason.map(s => `${s.from}→${s.to}`).join(', ')}` : ''}
           </div>
-          ${hotel.upgrade ? `<div class="item-card-preview" style="max-height:none">Upgrade: ${escHtml(hotel.upgrade.roomType)} +${formatAmount(hotel.upgrade.ratePerNight, cur)}/night</div>` : ''}
-          ${hotel.highSeason?.length ? `<div class="item-card-preview" style="max-height:none;color:#856404">High season: ${hotel.highSeason.map(s => `${s.from}→${s.to}`).join(', ')}</div>` : ''}
+          <div class="item-card-rooms">${roomRowsHtml}</div>
         </div>
         <div class="item-card-actions">
           <button class="btn-edit" data-stars="${tier}" data-idx="${idx}">Edit</button>
@@ -506,31 +510,160 @@ function openHotelModal(data) {
   v('hmStars',     data?.tier      || data?.starRating || '4');
   v('hmCity',      data?.city      || 'HN');
   v('hmVat',       data?.vatIncluded ? 'true' : 'false');
-  v('hmRoomType',  data?.roomType  || '');
   v('hmCurrency',  data?.currency  || 'USD');
-  v('hmFitLow',    data?.rates?.fit?.low  ?? '');
-  v('hmFitHigh',   data?.rates?.fit?.high ?? '');
-  v('hmGitLow',    data?.rates?.git?.low  ?? '');
-  v('hmGitHigh',   data?.rates?.git?.high ?? '');
-  v('hmExtraBed',  data?.extraBed ?? '');
-  v('hmShareBed',  data?.shareBed ?? '');
   v('hmEci',       data?.earlyCheckinRate ?? '');
-  v('hmUpgradeRoom', data?.upgrade?.roomType || '');
-  v('hmUpgradeRate', data?.upgrade?.ratePerNight ?? '');
   v('hmFocEvery',  data?.focRule?.everyRooms ?? '');
   v('hmFocFree',   data?.focRule?.freeRooms ?? '');
   v('hmHighSeason', formatSeasonRanges(data?.highSeason || []));
   v('hmUrl',       data?.url || '');
 
   document.getElementById('hmFlagSkip').checked    = (data?.flags || []).includes('skip');
-  document.getElementById('hmFlagNoEB').checked    = (data?.flags || []).includes('noExtraBed');
+  document.getElementById('hmFlagRed').checked     = (data?.flags || []).includes('redFlag');
   document.getElementById('hmFlagDC').checked      = (data?.flags || []).includes('dayCruiseOnly');
   document.getElementById('hmFlagGIT').checked     = (data?.flags || []).includes('gitOnly');
   document.getElementById('hmFlagPartial').checked = (data?.flags || []).includes('partialPrice');
 
+  // Rebuild room types list
+  const listEl = document.getElementById('hmRoomTypesList');
+  if (listEl) {
+    listEl.innerHTML = '';
+    const rts = Array.isArray(data?.roomTypes) ? data.roomTypes : [];
+    if (!rts.length) {
+      appendRoomTypeRow({});
+    } else {
+      rts.forEach(rt => appendRoomTypeRow(rt));
+    }
+  }
+
   modal.dataset.editIndex = data?.idx ?? '';
   modal.dataset.editStars = data?.tier ?? '';
   modal.style.display = 'flex';
+}
+
+/** Build one editable room-type sub-form and append it to #hmRoomTypesList. */
+function appendRoomTypeRow(rt) {
+  const list = document.getElementById('hmRoomTypesList');
+  if (!list) return;
+  const idx  = list.children.length;
+  const redFlag = (rt.flags || []).includes('redFlag');
+  const noEB    = rt.extraBedAllowed === false;
+
+  const row = document.createElement('div');
+  row.className = 'rt-row';
+  row.dataset.idx = String(idx);
+  row.innerHTML = `
+    <div class="rt-row-head">
+      <strong>Room type ${idx + 1}</strong>
+      <button type="button" class="btn-remove-rt" title="Remove this room type">✕ Remove</button>
+    </div>
+    <div class="field-row">
+      <div class="field-group" style="flex:2">
+        <label>Room type name</label>
+        <input type="text" class="rt-name" value="${escHtml(rt.name || '')}" />
+      </div>
+      <div class="field-group">
+        <label>Share bed / night</label>
+        <input type="number" step="0.01" class="rt-share" value="${rt.shareBed ?? ''}" />
+      </div>
+    </div>
+    <div class="rate-matrix">
+      <div class="rate-matrix-label">Rate (per room / night)</div>
+      <div class="rate-matrix-grid">
+        <div></div><div class="rmh">Low</div><div class="rmh">High</div>
+        <div class="rmh">FIT</div>
+        <div><input type="number" step="0.01" class="rt-fit-low"  value="${rt.rates?.fit?.low  ?? ''}" /></div>
+        <div><input type="number" step="0.01" class="rt-fit-high" value="${rt.rates?.fit?.high ?? ''}" /></div>
+        <div class="rmh">GIT</div>
+        <div><input type="number" step="0.01" class="rt-git-low"  value="${rt.rates?.git?.low  ?? ''}" /></div>
+        <div><input type="number" step="0.01" class="rt-git-high" value="${rt.rates?.git?.high ?? ''}" /></div>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label class="checkbox-inline">
+          <input type="checkbox" class="rt-eb-allowed" ${!noEB ? 'checked' : ''} />
+          <span>Allow extra bed on this room type</span>
+        </label>
+      </div>
+      <div class="field-group">
+        <label>Extra bed / night</label>
+        <input type="number" step="0.01" class="rt-eb-rate" value="${rt.extraBedRate ?? ''}" />
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label class="checkbox-inline">
+          <input type="checkbox" class="rt-flex" ${rt.flexiblePrice ? 'checked' : ''} />
+          <span>Flexible price — cho phép override giá khi book</span>
+        </label>
+      </div>
+      <div class="field-group">
+        <label class="checkbox-inline">
+          <input type="checkbox" class="rt-red" ${redFlag ? 'checked' : ''} />
+          <span>🚩 Red flag — đã bị đánh giá xấu</span>
+        </label>
+      </div>
+    </div>
+    <div class="field-group">
+      <label>Notes (per room type)</label>
+      <textarea rows="2" class="rt-notes">${escHtml(rt.notes || '')}</textarea>
+    </div>
+  `;
+  list.appendChild(row);
+  row.querySelector('.btn-remove-rt')?.addEventListener('click', () => {
+    row.remove();
+    renumberRoomTypeRows();
+  });
+}
+
+function renumberRoomTypeRows() {
+  const list = document.getElementById('hmRoomTypesList');
+  if (!list) return;
+  [...list.children].forEach((row, i) => {
+    row.dataset.idx = String(i);
+    const head = row.querySelector('.rt-row-head strong');
+    if (head) head.textContent = `Room type ${i + 1}`;
+  });
+}
+
+/** Read the repeater rows from the DOM and produce a validated roomTypes[]. */
+function collectRoomTypes(hotelName) {
+  const list = document.getElementById('hmRoomTypesList');
+  if (!list) return [];
+  const out = [];
+  [...list.children].forEach((row, i) => {
+    const name = row.querySelector('.rt-name')?.value.trim();
+    if (!name) return;
+    const rate = (cls) => {
+      const v = row.querySelector(cls)?.value?.trim();
+      return v === '' || v == null ? 0 : Number(v);
+    };
+    const numOrNull = (cls) => {
+      const v = row.querySelector(cls)?.value?.trim();
+      return v === '' || v == null ? null : Number(v);
+    };
+    const ebAllowed = !!row.querySelector('.rt-eb-allowed')?.checked;
+    const flex      = !!row.querySelector('.rt-flex')?.checked;
+    const red       = !!row.querySelector('.rt-red')?.checked;
+    const notes     = row.querySelector('.rt-notes')?.value || '';
+    const flags     = [];
+    if (red) flags.push('redFlag');
+    out.push({
+      id: `${generateId(hotelName)}__${generateId(name)}__${i}`,
+      name,
+      rates: {
+        fit: { low: rate('.rt-fit-low'), high: rate('.rt-fit-high') },
+        git: { low: rate('.rt-git-low'), high: rate('.rt-git-high') },
+      },
+      extraBedAllowed: ebAllowed,
+      extraBedRate:    ebAllowed ? numOrNull('.rt-eb-rate') : null,
+      shareBed:        numOrNull('.rt-share'),
+      flexiblePrice:   flex,
+      flags,
+      notes,
+    });
+  });
+  return out;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -545,7 +678,18 @@ function escHtml(str) {
 }
 
 function generateId(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 40);
+}
+
+function flagLabel(f) {
+  switch (f) {
+    case 'skip':          return 'Skip';
+    case 'redFlag':       return '🚩 Red';
+    case 'dayCruiseOnly': return 'Day-cruise';
+    case 'gitOnly':       return 'GIT only';
+    case 'partialPrice':  return 'Partial';
+    default:              return f;
+  }
 }
 
 function formatAmount(n, currency) {
@@ -559,9 +703,6 @@ function formatAmount(n, currency) {
   return `$${val}`;
 }
 
-/**
- * "06-01..08-31, 12-20..01-05" → [{from:"06-01",to:"08-31"}, {from:"12-20",to:"01-05"}]
- */
 function parseSeasonRanges(str) {
   if (!str || !str.trim()) return [];
   return str.split(',').map(s => {
